@@ -6,6 +6,7 @@ SelfMon VMOD available from http://www.selfmon.uk/sales/
 ## Credits
 
 Jason Ball for the keypad card layout used in the template
+
 Guy Wells for the inspiration and his integration for the Galaxy with VMOD https://github.com./guybw/selfmon-HA
 
 

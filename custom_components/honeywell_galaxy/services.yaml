@@ -1,0 +1,52 @@
+# Services for Honeywell Galaxy integration
+
+# Note: print_text service removed - virtual printer is read-only
+# The printer log sensor subscribes to selfmon/vmod.{vmodid}/vprinter/log
+# and displays the last 10 log lines in chronological order
+
+test_mqtt:
+  name: Test MQTT
+  description: Test MQTT publishing (for debugging).
+  fields:
+    topic:
+      name: Topic
+      description: MQTT topic to publish to
+      required: true
+      selector:
+        text:
+    payload:
+      name: Payload
+      description: Message payload
+      required: true
+      selector:
+        text:
+
+add_keypad_card:
+  name: Add Keypad Card
+  description: Automatically add the keypad card and printer log card to a Lovelace dashboard.
+  fields:
+    dashboard_id:
+      name: Dashboard ID
+      description: The dashboard ID to add the card to. Leave empty to use the default dashboard (automatically detected).
+      required: false
+      selector:
+        text:
+    view_id:
+      name: View ID
+      description: The view ID or title to add the card to. Optional, uses first view if not specified.
+      required: false
+      selector:
+        text:
+    add_printer_log_view:
+      name: Add Printer Log View
+      description: Whether to also add a separate printer log card. Default is true.
+      required: false
+      default: true
+      selector:
+        boolean:
+    printer_log_view_id:
+      name: Printer Log View ID
+      description: Optional separate view ID or title for the printer log card. If not specified, adds to the same view as the keypad card.
+      required: false
+      selector:
+        text:

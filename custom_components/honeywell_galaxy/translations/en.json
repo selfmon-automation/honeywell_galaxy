@@ -1,0 +1,65 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Honeywell Galaxy Setup",
+        "description": "Enter your MQTT connection details",
+        "data": {
+          "host": "MQTT Host",
+          "port": "MQTT Port",
+          "protocol": "MQTT Protocol",
+          "username": "MQTT Username (optional)",
+          "password": "MQTT Password (optional)",
+          "vmodid": "VMOD ID"
+        }
+      }
+    },
+    "error": {
+      "invalid_host": "Invalid hostname or IP address",
+      "unknown": "Unknown error occurred"
+    },
+    "abort": {
+      "already_configured": "Device is already configured"
+    }
+  },
+  "services": {
+    "print_text": {
+      "name": "Print Text",
+      "description": "Print text to the virtual printer.",
+      "fields": {
+        "text": {
+          "name": "Text",
+          "description": "The text to print"
+        }
+      }
+    },
+    "test_mqtt": {
+      "name": "Test MQTT",
+      "description": "Test MQTT publishing (for debugging).",
+      "fields": {
+        "topic": {
+          "name": "Topic",
+          "description": "MQTT topic to publish to"
+        },
+        "payload": {
+          "name": "Payload",
+          "description": "Message payload"
+        }
+      }
+    },
+    "add_keypad_card": {
+      "name": "Add Keypad Card",
+      "description": "Automatically add the keypad card to a Lovelace dashboard.",
+      "fields": {
+        "dashboard_id": {
+          "name": "Dashboard ID",
+          "description": "The dashboard ID to add the card to (default: lovelace)"
+        },
+        "view_id": {
+          "name": "View ID",
+          "description": "The view ID or title to add the card to (optional, uses first view if not specified)"
+        }
+      }
+    }
+  }
+}

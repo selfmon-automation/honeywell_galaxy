@@ -251,78 +251,53 @@ async def auto_add_cards(
         dashboards = lovelace.dashboards
         _LOGGER.warning(f"Available dashboards: {list(dashboards.keys())}")
         
-        # Strategy: Check for security dashboard first, try to create it if missing, then fall back to default
         actual_dashboard_id = None
         target_dashboard = None
         
-        # Step 1: Check if security dashboard exists
-        if "security" in dashboards:
-            actual_dashboard_id = "security"
-            target_dashboard = dashboards["security"]
-            _LOGGER.warning("Found existing security dashboard, using it")
+        async def find_dashboard_by_substring(search_substring: str):
+            """Find a dashboard containing the search substring (case-insensitive)."""
+            search_lower = search_substring.lower()
+            for dash_id, dashboard in dashboards.items():
+                if dash_id and isinstance(dash_id, str) and search_lower in dash_id.lower():
+                    _LOGGER.warning(f"Found '{search_substring}' in dashboard key: '{dash_id}'")
+                    return dash_id, dashboard
+                
+                try:
+                    config = await dashboard.async_load(force=False)
+                    if config:
+                        views = config.get("views", [])
+                        for view in views:
+                            view_title = view.get("title", "")
+                            if search_lower in view_title.lower():
+                                _LOGGER.warning(f"Found '{search_substring}' in view title: '{view_title}' (dashboard: '{dash_id}')")
+                                return dash_id, dashboard
+                except Exception:
+                    pass
+            return None, None
+        
+        _LOGGER.warning("Searching for dashboard containing 'selfmon' (case-insensitive)...")
+        dash_id, dashboard = await find_dashboard_by_substring("selfmon")
+        if dashboard:
+            actual_dashboard_id = dash_id
+            target_dashboard = dashboard
+            _LOGGER.warning(f"Found SelfMon dashboard: '{dash_id}'")
         else:
-            # Step 2: Try to create security dashboard
-            _LOGGER.warning("Security dashboard not found, attempting to create it")
-            security_created = False
-            try:
-                # Try different methods to create dashboard (API may vary by HA version)
-                if hasattr(lovelace, "async_create"):
-                    try:
-                        new_dashboard = await lovelace.async_create({"url_path": "security", "title": "Security"})
-                        if new_dashboard:
-                            actual_dashboard_id = "security"
-                            target_dashboard = new_dashboard
-                            security_created = True
-                            _LOGGER.warning("Successfully created security dashboard via async_create")
-                    except Exception as create_error:
-                        _LOGGER.debug(f"async_create failed: {create_error}")
-                
-                if not security_created and hasattr(lovelace, "async_create_dashboard"):
-                    try:
-                        new_dashboard = await lovelace.async_create_dashboard({"url_path": "security", "title": "Security"})
-                        if new_dashboard:
-                            actual_dashboard_id = "security"
-                            target_dashboard = new_dashboard
-                            security_created = True
-                            _LOGGER.warning("Successfully created security dashboard via async_create_dashboard")
-                    except Exception as create_error:
-                        _LOGGER.debug(f"async_create_dashboard failed: {create_error}")
-                
-                # Refresh dashboards after creation attempt
-                if security_created:
-                    dashboards = lovelace.dashboards
-                    if "security" in dashboards:
-                        target_dashboard = dashboards["security"]
-                        _LOGGER.warning("Using newly created security dashboard")
-                
-            except Exception as create_error:
-                _LOGGER.warning(f"Failed to create security dashboard: {create_error}, falling back to default")
-            
-            # Step 3: Fall back to default dashboard if security dashboard not available
-            if not security_created or not target_dashboard:
-                _LOGGER.warning("Security dashboard not available, falling back to default dashboard")
-                if None in dashboards:
-                    actual_dashboard_id = None
-                    target_dashboard = dashboards[None]
-                    _LOGGER.warning("Using default dashboard (None)")
-                elif "lovelace" in dashboards:
-                    actual_dashboard_id = "lovelace"
-                    target_dashboard = dashboards["lovelace"]
-                    _LOGGER.warning("Using default dashboard 'lovelace'")
-                elif "dashboard-lovelace" in dashboards:
-                    actual_dashboard_id = "dashboard-lovelace"
-                    target_dashboard = dashboards["dashboard-lovelace"]
-                    _LOGGER.warning("Using default dashboard 'dashboard-lovelace'")
+            _LOGGER.warning("SelfMon dashboard not found, searching for dashboard containing 'security' (case-insensitive)...")
+            dash_id, dashboard = await find_dashboard_by_substring("security")
+            if dashboard:
+                actual_dashboard_id = dash_id
+                target_dashboard = dashboard
+                _LOGGER.warning(f"Found security dashboard: '{dash_id}'")
+            else:
+                _LOGGER.warning("Neither 'selfmon' nor 'security' found in dashboard names, using first available dashboard")
+                dashboard_keys = list(dashboards.keys())
+                if dashboard_keys:
+                    actual_dashboard_id = dashboard_keys[0]
+                    target_dashboard = dashboards[actual_dashboard_id]
+                    _LOGGER.warning(f"Using first available dashboard: '{actual_dashboard_id}'")
                 else:
-                    # Try to find default dashboard by checking all dashboards
-                    dashboard_keys = list(dashboards.keys())
-                    if dashboard_keys:
-                        actual_dashboard_id = dashboard_keys[0]
-                        target_dashboard = dashboards[actual_dashboard_id]
-                        _LOGGER.warning(f"Using first available dashboard: '{actual_dashboard_id}'")
-                    else:
-                        _LOGGER.error("No dashboards available")
-                        return
+                    _LOGGER.error("No dashboards available")
+                    return
         
         if not target_dashboard:
             _LOGGER.error("No dashboard available")
@@ -344,17 +319,36 @@ async def auto_add_cards(
         
         views = config.get("views", [])
         
-        # If no views exist, create a default view
         if not views:
             _LOGGER.warning("No views found in dashboard, creating default view")
+            view_title = "Security" if actual_dashboard_id in (None, "lovelace", "dashboard-lovelace") else "Home"
             views = [{
-                "title": "Security" if actual_dashboard_id == "security" else "Home",
-                "path": actual_dashboard_id or "default",
+                "title": view_title,
                 "cards": []
             }]
             config["views"] = views
         
-        target_view = views[0]
+        target_view = None
+        if actual_dashboard_id in (None, "lovelace", "dashboard-lovelace"):
+            for view in views:
+                if isinstance(view, dict):
+                    view_title = view.get("title", "")
+                    if view_title.lower() == "security":
+                        target_view = view
+                        _LOGGER.warning(f"Found existing 'security' view: '{view_title}'")
+                        break
+            
+            if not target_view:
+                _LOGGER.warning("No 'security' view found in default dashboard, creating one")
+                target_view = {
+                    "title": "Security",
+                    "cards": []
+                }
+                views.append(target_view)
+                config["views"] = views
+        else:
+            target_view = views[0] if views else None
+        
         if not target_view:
             _LOGGER.error("No target view available")
             return

@@ -251,42 +251,107 @@ async def auto_add_cards(
         dashboards = lovelace.dashboards
         _LOGGER.warning(f"Available dashboards: {list(dashboards.keys())}")
         
-        dashboard_id = None
-        if None in dashboards:
-            actual_dashboard_id = None
-            _LOGGER.warning("Using default dashboard (None)")
-        elif "lovelace" in dashboards:
-            actual_dashboard_id = "lovelace"
-            _LOGGER.warning("Using default dashboard 'lovelace'")
-        elif "dashboard-lovelace" in dashboards:
-            actual_dashboard_id = "dashboard-lovelace"
-            _LOGGER.warning("Using default dashboard 'dashboard-lovelace'")
+        actual_dashboard_id = None
+        target_dashboard = None
+        
+        async def find_dashboard_by_substring(search_substring: str):
+            """Find a dashboard containing the search substring (case-insensitive)."""
+            search_lower = search_substring.lower()
+            for dash_id, dashboard in dashboards.items():
+                if dash_id and isinstance(dash_id, str) and search_lower in dash_id.lower():
+                    _LOGGER.warning(f"Found '{search_substring}' in dashboard key: '{dash_id}'")
+                    return dash_id, dashboard
+                
+                try:
+                    config = await dashboard.async_load(force=False)
+                    if config:
+                        views = config.get("views", [])
+                        for view in views:
+                            view_title = view.get("title", "")
+                            if search_lower in view_title.lower():
+                                _LOGGER.warning(f"Found '{search_substring}' in view title: '{view_title}' (dashboard: '{dash_id}')")
+                                return dash_id, dashboard
+                except Exception:
+                    pass
+            return None, None
+        
+        _LOGGER.warning("Searching for dashboard containing 'selfmon' (case-insensitive)...")
+        dash_id, dashboard = await find_dashboard_by_substring("selfmon")
+        if dashboard:
+            actual_dashboard_id = dash_id
+            target_dashboard = dashboard
+            _LOGGER.warning(f"Found SelfMon dashboard: '{dash_id}'")
         else:
-            actual_dashboard_id = list(dashboards.keys())[0]
-            _LOGGER.warning(f"No default dashboard found, using first available: '{actual_dashboard_id}'")
+            _LOGGER.warning("SelfMon dashboard not found, searching for dashboard containing 'security' (case-insensitive)...")
+            dash_id, dashboard = await find_dashboard_by_substring("security")
+            if dashboard:
+                actual_dashboard_id = dash_id
+                target_dashboard = dashboard
+                _LOGGER.warning(f"Found security dashboard: '{dash_id}'")
+            else:
+                _LOGGER.warning("Neither 'selfmon' nor 'security' found in dashboard names, using first available dashboard")
+                dashboard_keys = list(dashboards.keys())
+                if dashboard_keys:
+                    actual_dashboard_id = dashboard_keys[0]
+                    target_dashboard = dashboards[actual_dashboard_id]
+                    _LOGGER.warning(f"Using first available dashboard: '{actual_dashboard_id}'")
+                else:
+                    _LOGGER.error("No dashboards available")
+                    return
+        
+        if not target_dashboard:
+            _LOGGER.error("No dashboard available")
+            return
         
         _LOGGER.warning(f"Using dashboard '{actual_dashboard_id}'")
         _LOGGER.warning(f"Found dashboard '{actual_dashboard_id}', loading configuration...")
-        default_dashboard = dashboards[actual_dashboard_id]
-        _LOGGER.warning(f"Dashboard type: {type(default_dashboard)}, has async_load: {hasattr(default_dashboard, 'async_load')}")
+        _LOGGER.warning(f"Dashboard type: {type(target_dashboard)}, has async_load: {hasattr(target_dashboard, 'async_load')}")
         
         try:
-            config = await default_dashboard.async_load(force=False)
+            config = await target_dashboard.async_load(force=False)
+            if not config:
+                _LOGGER.error("Dashboard config is None after load")
+                return
             _LOGGER.warning(f"Loaded dashboard config, found {len(config.get('views', []))} view(s)")
         except Exception as load_error:
             _LOGGER.error(f"Failed to load dashboard config: {load_error}", exc_info=True)
             return
         
-        if not config:
-            _LOGGER.error("Dashboard config is None")
-            return
         views = config.get("views", [])
         
         if not views:
-            _LOGGER.error("No views found in dashboard")
-            return
+            _LOGGER.warning("No views found in dashboard, creating default view")
+            view_title = "Security" if actual_dashboard_id in (None, "lovelace", "dashboard-lovelace") else "Home"
+            views = [{
+                "title": view_title,
+                "cards": []
+            }]
+            config["views"] = views
         
-        target_view = views[0]
+        target_view = None
+        if actual_dashboard_id in (None, "lovelace", "dashboard-lovelace"):
+            for view in views:
+                if isinstance(view, dict):
+                    view_title = view.get("title", "")
+                    if view_title.lower() == "security":
+                        target_view = view
+                        _LOGGER.warning(f"Found existing 'security' view: '{view_title}'")
+                        break
+            
+            if not target_view:
+                _LOGGER.warning("No 'security' view found in default dashboard, creating one")
+                target_view = {
+                    "title": "Security",
+                    "cards": []
+                }
+                views.append(target_view)
+                config["views"] = views
+        else:
+            target_view = views[0] if views else None
+        
+        if not target_view:
+            _LOGGER.error("No target view available")
+            return
         
         view_cards = target_view.get("cards", [])
         
@@ -413,9 +478,9 @@ async def auto_add_cards(
         _LOGGER.warning(f"Card titles: {[card.get('title', 'No title') for card in view_cards]}")
         
         try:
-            await default_dashboard.async_save(config)
+            await target_dashboard.async_save(config)
             _LOGGER.warning("=" * 60)
-            _LOGGER.warning("✓ Successfully added cards to dashboard!")
+            _LOGGER.warning(f"✓ Successfully added cards to dashboard '{actual_dashboard_id}'!")
             _LOGGER.warning("=" * 60)
         except Exception as e:
             _LOGGER.error(f"Failed to save dashboard: {e}", exc_info=True)

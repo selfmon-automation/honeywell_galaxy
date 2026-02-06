@@ -57,10 +57,11 @@ The custom cards are required for the automatically generated keypad interface.
 
 ## Configuration
 
-1. Go to Settings > Devices & Services
-2. Click "Add Integration"
-3. Search for "Honeywell Galaxy"
-4. Enter your MQTT connection details:
+1. Create a new dashboard called SelfMon or Security and make viewable in the left menu 
+2. Go to Settings > Devices & Services
+3. Click "Add Integration"
+4. Search for "Honeywell Galaxy"
+5. Enter your MQTT connection details:
    - **Host**: MQTT broker hostname or IP address
    - **Port**: MQTT broker port (default: 1883)
    - **Protocol**: mqtt, mqtts, ws, or wss

@@ -21,7 +21,6 @@ from homeassistant.components.lovelace.const import (
     MODE_STORAGE,
     ConfigNotFound,
 )
-from homeassistant.components.frontend import async_panel_exists
 from homeassistant.components.lovelace.dashboard import DashboardsCollection, LovelaceStorage
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
@@ -52,6 +51,19 @@ DEFAULT_SECURITY_DASHBOARD_ITEM = {
     CONF_TITLE: "Security",
     CONF_URL_PATH: SECURITY_URL_PATH,
 }
+
+
+@callback
+def _panel_exists(hass: HomeAssistant, url_path: str) -> bool:
+    """Return whether a frontend panel is already registered."""
+    from homeassistant.components import frontend
+
+    if hasattr(frontend, "async_panel_exists"):
+        return frontend.async_panel_exists(hass, url_path)
+
+    panels_key = getattr(frontend, "DATA_PANELS", "frontend_panels")
+    panels = hass.data.get(panels_key, {})
+    return url_path in panels
 
 
 async def _try_load_dashboard(dashboard) -> dict | None:
@@ -106,7 +118,7 @@ async def _ensure_security_dashboard_loaded(
     if SECURITY_URL_PATH not in dashboards:
         dashboards[SECURITY_URL_PATH] = LovelaceStorage(hass, item)
 
-    if not async_panel_exists(hass, SECURITY_URL_PATH):
+    if not _panel_exists(hass, SECURITY_URL_PATH):
         await _register_storage_dashboard_panel(hass, item)
 
     return dashboards[SECURITY_URL_PATH]

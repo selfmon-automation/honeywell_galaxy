@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from pathlib import Path
 from typing import Any
@@ -81,17 +82,32 @@ async def _register_storage_dashboard_panel(
     """Register a storage-mode dashboard in the frontend."""
     from homeassistant.components import frontend
 
-    frontend.async_register_built_in_panel(
-        hass,
-        "lovelace",
-        frontend_url_path=item[CONF_URL_PATH],
-        require_admin=item.get(CONF_REQUIRE_ADMIN, False),
-        show_in_sidebar=item.get(CONF_SHOW_IN_SIDEBAR, True),
-        sidebar_title=item[CONF_TITLE],
-        sidebar_icon=item.get(CONF_ICON, DEFAULT_ICON),
-        config={"mode": MODE_STORAGE},
-        update=update,
-    )
+    show_in_sidebar = item.get(CONF_SHOW_IN_SIDEBAR, True)
+    kwargs: dict[str, Any] = {
+        "frontend_url_path": item[CONF_URL_PATH],
+        "require_admin": item.get(CONF_REQUIRE_ADMIN, False),
+        "sidebar_title": item[CONF_TITLE],
+        "sidebar_icon": item.get(CONF_ICON, DEFAULT_ICON),
+        "config": {"mode": MODE_STORAGE},
+        "update": update,
+    }
+
+    register = frontend.async_register_built_in_panel
+    params = inspect.signature(register).parameters
+    if "show_in_sidebar" in params:
+        kwargs["show_in_sidebar"] = show_in_sidebar
+    elif "sidebar_default_visible" in params:
+        kwargs["sidebar_default_visible"] = show_in_sidebar
+
+    try:
+        register(hass, "lovelace", **kwargs)
+    except TypeError as err:
+        _LOGGER.debug(
+            "Panel registration retry without sidebar visibility args: %s", err
+        )
+        kwargs.pop("show_in_sidebar", None)
+        kwargs.pop("sidebar_default_visible", None)
+        register(hass, "lovelace", **kwargs)
 
 
 def _find_security_dashboard_item(collection: DashboardsCollection) -> dict | None:
@@ -122,7 +138,14 @@ async def _ensure_security_dashboard_loaded(
         dashboards[SECURITY_URL_PATH] = LovelaceStorage(hass, item)
 
     panel_exists = _panel_exists(hass, SECURITY_URL_PATH)
-    await _register_storage_dashboard_panel(hass, item, update=panel_exists)
+    try:
+        await _register_storage_dashboard_panel(hass, item, update=panel_exists)
+    except Exception as err:
+        _LOGGER.warning(
+            "Could not update sidebar entry for /%s (cards can still be saved): %s",
+            SECURITY_URL_PATH,
+            err,
+        )
 
     return dashboards[SECURITY_URL_PATH]
 

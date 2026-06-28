@@ -37,22 +37,38 @@ _LOGGER = logging.getLogger(__name__)
 
 GALAXY_KEYPAD_TITLE = "Galaxy Keypad"
 GALAXY_VIEW_TITLE = "Honeywell Galaxy"
-SECURITY_URL_PATH = "security"
+GALAXY_KEYPAD_URL_PATH = "galaxy-keypad"
+LEGACY_GALAXY_KEYPAD_URL_PATH = "security"
 DEFAULT_CARD_SETUP_DELAY = 50
 CARD_SETUP_RETRIES = (0, 45, 90)
 CARD_RESCHEDULE_DELAY = 10
 
+# Common HACS resource URLs (first match wins when registering).
+BUTTON_CARD_RESOURCE_URLS = (
+    "/hacsfiles/button-card/button-card.js",
+    "/hacsfiles/lovelace-button-card/button-card.js",
+)
+STACK_IN_CARD_RESOURCE_URLS = (
+    "/hacsfiles/stack-in-card/stack-in-card.js",
+    "/hacsfiles/lovelace-stack-in-card/stack-in-card.js",
+)
+
 _card_schedule_handles: dict[str, callback] = {}
 
-DEFAULT_SECURITY_DASHBOARD_ITEM = {
-    "id": SECURITY_URL_PATH,
+DEFAULT_GALAXY_KEYPAD_DASHBOARD_ITEM = {
+    "id": GALAXY_KEYPAD_URL_PATH,
     CONF_ALLOW_SINGLE_WORD: True,
     CONF_ICON: "mdi:dialpad",
     CONF_REQUIRE_ADMIN: False,
     CONF_SHOW_IN_SIDEBAR: True,
-    CONF_TITLE: "Galaxy Keypad",
-    CONF_URL_PATH: SECURITY_URL_PATH,
+    CONF_TITLE: GALAXY_KEYPAD_TITLE,
+    CONF_URL_PATH: GALAXY_KEYPAD_URL_PATH,
 }
+
+
+def _is_dedicated_galaxy_dashboard(dashboard_id: str | None) -> bool:
+    """Return True for the integration's standalone keypad dashboard."""
+    return dashboard_id in (GALAXY_KEYPAD_URL_PATH, LEGACY_GALAXY_KEYPAD_URL_PATH)
 
 
 @callback
@@ -110,97 +126,101 @@ async def _register_storage_dashboard_panel(
         register(hass, "lovelace", **kwargs)
 
 
-def _find_security_dashboard_item(collection: DashboardsCollection) -> dict | None:
-    """Return the Security dashboard item from the dashboards collection."""
-    if SECURITY_URL_PATH in collection.data:
-        return collection.data[SECURITY_URL_PATH]
+def _find_galaxy_keypad_dashboard_item(collection: DashboardsCollection) -> dict | None:
+    """Return the Galaxy Keypad dashboard item from the dashboards collection."""
+    for url_path in (GALAXY_KEYPAD_URL_PATH, LEGACY_GALAXY_KEYPAD_URL_PATH):
+        if url_path in collection.data:
+            return collection.data[url_path]
 
     for item in collection.async_items():
-        if item.get(CONF_URL_PATH) == SECURITY_URL_PATH:
+        item_path = item.get(CONF_URL_PATH)
+        if item_path in (GALAXY_KEYPAD_URL_PATH, LEGACY_GALAXY_KEYPAD_URL_PATH):
             return item
 
     return None
 
 
-def _security_dashboard_item() -> dict:
-    """Return a minimal Security dashboard item for LovelaceStorage."""
-    return dict(DEFAULT_SECURITY_DASHBOARD_ITEM)
+def _galaxy_keypad_dashboard_item() -> dict:
+    """Return a minimal Galaxy Keypad dashboard item for LovelaceStorage."""
+    return dict(DEFAULT_GALAXY_KEYPAD_DASHBOARD_ITEM)
 
 
-async def _ensure_security_dashboard_loaded(
+async def _ensure_galaxy_keypad_dashboard_loaded(
     hass: HomeAssistant,
     lovelace_data,
     item: dict,
 ) -> LovelaceStorage:
-    """Ensure the Security dashboard is available in Lovelace data."""
+    """Ensure the Galaxy Keypad dashboard is available in Lovelace data."""
+    url_path = item[CONF_URL_PATH]
     dashboards = lovelace_data.dashboards
-    if SECURITY_URL_PATH not in dashboards:
-        dashboards[SECURITY_URL_PATH] = LovelaceStorage(hass, item)
+    if url_path not in dashboards:
+        dashboards[url_path] = LovelaceStorage(hass, item)
 
-    panel_exists = _panel_exists(hass, SECURITY_URL_PATH)
+    panel_exists = _panel_exists(hass, url_path)
     try:
         await _register_storage_dashboard_panel(hass, item, update=panel_exists)
     except Exception as err:
         _LOGGER.warning(
             "Could not update sidebar entry for /%s (cards can still be saved): %s",
-            SECURITY_URL_PATH,
+            url_path,
             err,
         )
 
-    return dashboards[SECURITY_URL_PATH]
+    return dashboards[url_path]
 
 
-async def _get_or_create_security_dashboard(
+async def _get_or_create_galaxy_keypad_dashboard(
     hass: HomeAssistant,
     lovelace_data,
 ) -> tuple[str | None, LovelaceStorage | None, dict | None]:
-    """Return a writable Security dashboard, creating one if needed."""
+    """Return a writable Galaxy Keypad dashboard, creating one if needed."""
     dashboards = lovelace_data.dashboards
 
-    if SECURITY_URL_PATH in dashboards:
-        security_dashboard = dashboards[SECURITY_URL_PATH]
-        config = await _try_load_dashboard(security_dashboard)
-        if config is not None:
-            return SECURITY_URL_PATH, security_dashboard, config
+    for url_path in (GALAXY_KEYPAD_URL_PATH, LEGACY_GALAXY_KEYPAD_URL_PATH):
+        if url_path in dashboards:
+            galaxy_dashboard = dashboards[url_path]
+            config = await _try_load_dashboard(galaxy_dashboard)
+            if config is not None:
+                return url_path, galaxy_dashboard, config
 
     collection = DashboardsCollection(hass)
     await collection.async_load()
-    item = _find_security_dashboard_item(collection)
+    item = _find_galaxy_keypad_dashboard_item(collection)
 
     if item is None:
         try:
             await collection.async_create_item(
                 {
                     CONF_ALLOW_SINGLE_WORD: True,
-                    CONF_ICON: DEFAULT_SECURITY_DASHBOARD_ITEM[CONF_ICON],
-                    CONF_TITLE: DEFAULT_SECURITY_DASHBOARD_ITEM[CONF_TITLE],
-                    CONF_URL_PATH: SECURITY_URL_PATH,
+                    CONF_ICON: DEFAULT_GALAXY_KEYPAD_DASHBOARD_ITEM[CONF_ICON],
+                    CONF_TITLE: DEFAULT_GALAXY_KEYPAD_DASHBOARD_ITEM[CONF_TITLE],
+                    CONF_URL_PATH: GALAXY_KEYPAD_URL_PATH,
                 }
             )
         except HomeAssistantError as err:
             if getattr(err, "translation_key", None) == "url_already_exists":
                 _LOGGER.info(
-                    "Security dashboard panel already registered; reusing /%s",
-                    SECURITY_URL_PATH,
+                    "Galaxy Keypad dashboard panel already registered; reusing /%s",
+                    GALAXY_KEYPAD_URL_PATH,
                 )
-                item = _security_dashboard_item()
+                item = _galaxy_keypad_dashboard_item()
             else:
-                _LOGGER.warning("Could not create security dashboard: %s", err)
+                _LOGGER.warning("Could not create Galaxy Keypad dashboard: %s", err)
                 return None, None, None
         except vol.Invalid as err:
-            _LOGGER.warning("Could not create security dashboard: %s", err)
+            _LOGGER.warning("Could not create Galaxy Keypad dashboard: %s", err)
             return None, None, None
         else:
-            item = _find_security_dashboard_item(collection)
+            item = _find_galaxy_keypad_dashboard_item(collection)
 
     if item is None:
-        _LOGGER.error("Security dashboard item could not be resolved")
+        _LOGGER.error("Galaxy Keypad dashboard item could not be resolved")
         return None, None, None
 
-    security_dashboard = await _ensure_security_dashboard_loaded(
+    galaxy_dashboard = await _ensure_galaxy_keypad_dashboard_loaded(
         hass, lovelace_data, item
     )
-    config = await _try_load_dashboard(security_dashboard)
+    config = await _try_load_dashboard(galaxy_dashboard)
     if config is None:
         config = {
             "views": [
@@ -211,9 +231,9 @@ async def _get_or_create_security_dashboard(
                 }
             ]
         }
-        await security_dashboard.async_save(config)
+        await galaxy_dashboard.async_save(config)
 
-    return SECURITY_URL_PATH, security_dashboard, config
+    return item[CONF_URL_PATH], galaxy_dashboard, config
 
 
 def _collect_entities(
@@ -426,7 +446,7 @@ def _card_by_title(cards: list[dict], title: str) -> dict | None:
 def _build_three_column_layout(
     keypad_card: dict, entity_cards: list[dict]
 ) -> dict:
-    """Build a three-column layout matching the original Galaxy dashboard."""
+    """Build a full-width keypad row with entity cards in columns below."""
     log_card = _card_by_title(entity_cards, "Honeywell Galaxy Log")
     zones_card = _card_by_title(entity_cards, "Physical RIO Inputs")
     outputs_card = _card_by_title(entity_cards, "Physical RIO Outputs")
@@ -437,16 +457,88 @@ def _build_three_column_layout(
     def _column(*cards: dict | None) -> dict:
         return {"type": "vertical-stack", "cards": [c for c in cards if c is not None]}
 
-    columns = [
-        _column(keypad_card, vrio_outputs_card, groups_card),
-        _column(log_card, zones_card),
-        _column(outputs_card, vrio_zones_card),
+    entity_columns = [
+        col
+        for col in (
+            _column(vrio_outputs_card, groups_card),
+            _column(log_card, zones_card),
+            _column(outputs_card, vrio_zones_card),
+        )
+        if col["cards"]
     ]
-    columns = [col for col in columns if col["cards"]]
 
-    if len(columns) == 1:
-        return columns[0]
-    return {"type": "horizontal-stack", "cards": columns}
+    if not entity_columns:
+        return keypad_card
+
+    if len(entity_columns) == 1:
+        return {"type": "vertical-stack", "cards": [keypad_card, entity_columns[0]]}
+
+    return {
+        "type": "vertical-stack",
+        "cards": [
+            keypad_card,
+            {
+                "type": "grid",
+                "columns": min(3, len(entity_columns)),
+                "square": False,
+                "cards": entity_columns,
+            },
+        ],
+    }
+
+
+async def _ensure_lovelace_resources(hass: HomeAssistant) -> bool:
+    """Ensure button-card and stack-in-card are registered for Lovelace."""
+    lovelace_data = hass.data.get(LOVELACE_DATA)
+    if lovelace_data is None:
+        return False
+
+    resources = getattr(lovelace_data, "resources", None)
+    if resources is None:
+        return False
+
+    if not getattr(resources, "loaded", False):
+        await resources.async_load()
+        resources.loaded = True
+
+    existing_urls = [item["url"] for item in resources.async_items()]
+
+    def _resource_registered(name: str) -> bool:
+        return any(name in url for url in existing_urls)
+
+    required = (
+        ("button-card", BUTTON_CARD_RESOURCE_URLS),
+        ("stack-in-card", STACK_IN_CARD_RESOURCE_URLS),
+    )
+    added: list[str] = []
+
+    for name, candidates in required:
+        if _resource_registered(name):
+            continue
+        for url in candidates:
+            try:
+                await resources.async_create_item({"url": url, "type": "module"})
+                existing_urls.append(url)
+                added.append(url)
+                break
+            except Exception as err:
+                _LOGGER.debug("Could not register Lovelace resource %s: %s", url, err)
+
+    if added:
+        _LOGGER.info("Registered Lovelace resources: %s", ", ".join(added))
+
+    missing = [name for name, _ in required if not _resource_registered(name)]
+    if missing:
+        _LOGGER.warning(
+            "Missing Lovelace resources for the graphical keypad: %s. "
+            "Install button-card and stack-in-card via HACS, confirm they appear "
+            "under Settings → Dashboards → Resources, then run "
+            "honeywell_galaxy.add_dashboard_cards again.",
+            ", ".join(missing),
+        )
+        return False
+
+    return True
 
 
 def _area_name(hass: HomeAssistant, area_id: str) -> str | None:
@@ -590,6 +682,8 @@ def _find_dashboard_by_substring(
 
 def _normalize_security_dashboard_view(config: dict) -> dict:
     """Collapse duplicate views on /security into one canonical tab."""
+    config.pop("strategy", None)
+
     views = [view for view in config.get("views", []) if isinstance(view, dict)]
     target: dict | None = None
 
@@ -609,8 +703,34 @@ def _normalize_security_dashboard_view(config: dict) -> dict:
 
     target["title"] = GALAXY_VIEW_TITLE
     target.setdefault("path", "galaxy")
+    target.pop("strategy", None)
+    target.pop("sections", None)
+    if target.get("type") == "sections":
+        target.pop("type", None)
     config["views"] = [target]
     return target
+
+
+def _apply_galaxy_layout(
+    config: dict,
+    target_view: dict,
+    layout: dict,
+    *,
+    dedicated_dashboard: bool,
+) -> None:
+    """Write the Galaxy layout, replacing area-strategy content when needed."""
+    config.pop("strategy", None)
+    target_view.pop("strategy", None)
+    target_view.pop("sections", None)
+    if target_view.get("type") == "sections":
+        target_view.pop("type", None)
+
+    if dedicated_dashboard:
+        target_view["type"] = "panel"
+        target_view["cards"] = [layout]
+        return
+
+    _merge_layout_into_view(target_view, layout)
 
 
 async def _resolve_dashboard_and_view(
@@ -618,13 +738,26 @@ async def _resolve_dashboard_and_view(
     lovelace_data,
     entry: ConfigEntry,
 ) -> tuple[str | None, LovelaceStorage | None, dict | None, dict | None]:
-    """Find a writable dashboard view for the integration's assigned area."""
+    """Find a writable dashboard view for the Galaxy keypad layout."""
+    dash_id, dashboard, config = await _get_or_create_galaxy_keypad_dashboard(
+        hass, lovelace_data
+    )
+    if dashboard and config:
+        view = _normalize_security_dashboard_view(config)
+        _LOGGER.info(
+            "Using dedicated /%s dashboard (sidebar: %s)",
+            dash_id,
+            GALAXY_KEYPAD_TITLE,
+        )
+        return dash_id, dashboard, config, view
+
     area_id = get_entry_area_id(hass, entry)
     area_name = _area_name(hass, area_id) if area_id else None
     loadable = await _iter_loadable_dashboards(lovelace_data)
 
     _LOGGER.info(
-        "Resolving Galaxy dashboard (area=%s, loadable_dashboards=%s)",
+        "Galaxy Keypad dashboard unavailable; resolving fallback "
+        "(area=%s, loadable_dashboards=%s)",
         area_name or "none",
         [dash_id or "default" for dash_id, _, _ in loadable],
     )
@@ -651,17 +784,6 @@ async def _resolve_dashboard_and_view(
                     dash_id or "default",
                 )
                 return dash_id, dashboard, config, view
-
-    dash_id, dashboard, config = await _get_or_create_security_dashboard(
-        hass, lovelace_data
-    )
-    if dashboard and config:
-        view = _normalize_security_dashboard_view(config)
-        _LOGGER.info(
-            "Using dedicated /%s dashboard (sidebar: Galaxy Keypad)",
-            SECURITY_URL_PATH,
-        )
-        return dash_id, dashboard, config, view
 
     for substring in ("selfmon",):
         match = _find_dashboard_by_substring(loadable, substring)
@@ -760,6 +882,8 @@ async def _try_add_cards(
         _LOGGER.error("Lovelace not available")
         return False
 
+    resources_ok = await _ensure_lovelace_resources(hass)
+
     lovelace = hass.data[LOVELACE_DATA]
     if not hasattr(lovelace, "dashboards"):
         _LOGGER.error("Lovelace dashboards not available")
@@ -785,8 +909,9 @@ async def _try_add_cards(
     entity_cards = _build_entity_cards(collected, entities.get("printer_log"))
     area_id = get_entry_area_id(hass, entry)
     area_name = _area_name(hass, area_id) if area_id else None
+    dedicated_dashboard = _is_dedicated_galaxy_dashboard(_dashboard_id)
     keypad_only = (
-        _dashboard_id != SECURITY_URL_PATH
+        not dedicated_dashboard
         and area_id
         and area_name
         and _view_matches_area(target_view, area_id, area_name)
@@ -795,20 +920,34 @@ async def _try_add_cards(
         layout = keypad_card
     else:
         layout = _build_three_column_layout(keypad_card, entity_cards)
-    _merge_layout_into_view(target_view, layout)
+    _apply_galaxy_layout(
+        config,
+        target_view,
+        layout,
+        dedicated_dashboard=dedicated_dashboard,
+    )
 
     await target_dashboard.async_save(config)
 
-    if _dashboard_id == SECURITY_URL_PATH:
+    if dedicated_dashboard:
         from homeassistant.components import persistent_notification
+
+        resource_hint = ""
+        if not resources_ok:
+            resource_hint = (
+                "\n\nCustom cards are missing from Dashboard Resources. "
+                "Install **button-card** and **stack-in-card** via HACS, verify "
+                "they appear under Settings → Dashboards → Resources, then run "
+                "**honeywell_galaxy.add_dashboard_cards** again."
+            )
 
         persistent_notification.async_create(
             hass,
             (
-                "The graphical keypad is ready. Open **Galaxy Keypad** in the left "
-                f"sidebar, or go to /{SECURITY_URL_PATH} in your browser.\n\n"
-                "Note: The Overview → Security tab only shows entity tiles. "
-                "That is not the graphical keypad."
+                f"The graphical keypad is ready. Open **{GALAXY_KEYPAD_TITLE}** in "
+                f"the left sidebar, or go to /{_dashboard_id} in your browser.\n\n"
+                "Do not use Overview → Security — that page only shows zone tiles "
+                f"for your Security area.{resource_hint}"
             ),
             title="Honeywell Galaxy",
             notification_id=f"{DOMAIN}_dashboard_cards",
@@ -816,10 +955,10 @@ async def _try_add_cards(
 
     view_label = target_view.get("title") or target_view.get("path") or "view"
     dashboard_label = _dashboard_id or "default"
-    if _dashboard_id == SECURITY_URL_PATH:
+    if dedicated_dashboard:
         location_hint = (
-            "Open Galaxy Keypad in the left sidebar "
-            f"(/{SECURITY_URL_PATH}) — not the Overview Security tab"
+            f"Open {GALAXY_KEYPAD_TITLE} in the left sidebar "
+            f"(/{_dashboard_id}) — not Overview → Security"
         )
     else:
         location_hint = (

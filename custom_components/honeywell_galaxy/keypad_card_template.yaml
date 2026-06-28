@@ -3,9 +3,9 @@
 
 title: Galaxy Keypad
 keep:
-  background: 'true'
-  border_radius: 'true'
-  box_shadow: 'true'
+  background: true
+  border_radius: true
+  box_shadow: true
 mode: vertical
 type: custom:stack-in-card
 cards:

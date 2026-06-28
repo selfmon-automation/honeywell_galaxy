@@ -5,8 +5,22 @@ import logging
 import os
 from pathlib import Path
 
+from homeassistant.components.lovelace.const import (
+    CONF_ALLOW_SINGLE_WORD,
+    CONF_ICON,
+    CONF_REQUIRE_ADMIN,
+    CONF_SHOW_IN_SIDEBAR,
+    CONF_TITLE,
+    CONF_URL_PATH,
+    DEFAULT_ICON,
+    LOVELACE_DATA,
+    MODE_STORAGE,
+    ConfigNotFound,
+)
+from homeassistant.components.lovelace.dashboard import DashboardsCollection, LovelaceStorage
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import entity_registry as er
 import voluptuous as vol
@@ -89,6 +103,74 @@ async def async_unload_services(hass: HomeAssistant) -> None:
     """Unload services for Honeywell Galaxy."""
     hass.services.async_remove(DOMAIN, SERVICE_PRINT_TEXT)
     hass.services.async_remove(DOMAIN, SERVICE_TEST_MQTT)
+
+
+async def _try_load_dashboard(dashboard) -> dict | None:
+    """Load a dashboard config, returning None if unavailable."""
+    try:
+        return await dashboard.async_load(force=False)
+    except ConfigNotFound:
+        return None
+
+
+async def _register_storage_dashboard_panel(hass: HomeAssistant, item: dict) -> None:
+    """Register a storage-mode dashboard in the frontend."""
+    from homeassistant.components import frontend
+
+    frontend.async_register_built_in_panel(
+        hass,
+        "lovelace",
+        frontend_url_path=item[CONF_URL_PATH],
+        require_admin=item.get(CONF_REQUIRE_ADMIN, False),
+        show_in_sidebar=item.get(CONF_SHOW_IN_SIDEBAR, True),
+        sidebar_title=item[CONF_TITLE],
+        sidebar_icon=item.get(CONF_ICON, DEFAULT_ICON),
+        config={"mode": MODE_STORAGE},
+        update=False,
+    )
+
+
+async def _get_or_create_security_dashboard(
+    hass: HomeAssistant,
+    lovelace_data,
+) -> tuple[str | None, LovelaceStorage | None, dict | None]:
+    """Return a writable Security dashboard, creating one if needed."""
+    dashboards = lovelace_data.dashboards
+
+    if "security" in dashboards:
+        config = await _try_load_dashboard(dashboards["security"])
+        if config is not None:
+            return "security", dashboards["security"], config
+
+    collection = DashboardsCollection(hass)
+    await collection.async_load()
+
+    if "security" not in collection.data:
+        try:
+            await collection.async_create_item(
+                {
+                    CONF_ALLOW_SINGLE_WORD: True,
+                    CONF_ICON: "mdi:shield-home",
+                    CONF_TITLE: "Security",
+                    CONF_URL_PATH: "security",
+                }
+            )
+        except (HomeAssistantError, vol.Invalid) as err:
+            _LOGGER.warning("Could not create security dashboard: %s", err)
+            return None, None, None
+
+    if "security" not in dashboards:
+        item = collection.data["security"]
+        dashboards["security"] = LovelaceStorage(hass, item)
+        await _register_storage_dashboard_panel(hass, item)
+
+    security_dashboard = dashboards["security"]
+    config = await _try_load_dashboard(security_dashboard)
+    if config is None:
+        config = {"views": [{"title": "Security", "cards": []}]}
+        await security_dashboard.async_save(config)
+
+    return "security", security_dashboard, config
 
 
 async def auto_add_cards(
@@ -239,11 +321,11 @@ async def auto_add_cards(
             _LOGGER.error(f"Failed to load keypad card template: {e}", exc_info=True)
             return
         
-        if "lovelace" not in hass.data:
+        if LOVELACE_DATA not in hass.data:
             _LOGGER.error("Lovelace not available")
             return
         
-        lovelace = hass.data["lovelace"]
+        lovelace = hass.data[LOVELACE_DATA]
         if not hasattr(lovelace, "dashboards"):
             _LOGGER.error("Lovelace dashboards not available")
             return
@@ -253,69 +335,85 @@ async def auto_add_cards(
         
         actual_dashboard_id = None
         target_dashboard = None
+        config = None
         
         async def find_dashboard_by_substring(search_substring: str):
-            """Find a dashboard containing the search substring (case-insensitive)."""
+            """Find a loadable dashboard containing the search substring."""
             search_lower = search_substring.lower()
             for dash_id, dashboard in dashboards.items():
                 if dash_id and isinstance(dash_id, str) and search_lower in dash_id.lower():
-                    _LOGGER.warning(f"Found '{search_substring}' in dashboard key: '{dash_id}'")
-                    return dash_id, dashboard
+                    loaded_config = await _try_load_dashboard(dashboard)
+                    if loaded_config is not None:
+                        _LOGGER.warning(
+                            f"Found '{search_substring}' in dashboard key: '{dash_id}'"
+                        )
+                        return dash_id, dashboard, loaded_config
                 
-                try:
-                    config = await dashboard.async_load(force=False)
-                    if config:
-                        views = config.get("views", [])
-                        for view in views:
-                            view_title = view.get("title", "")
-                            if search_lower in view_title.lower():
-                                _LOGGER.warning(f"Found '{search_substring}' in view title: '{view_title}' (dashboard: '{dash_id}')")
-                                return dash_id, dashboard
-                except Exception:
-                    pass
-            return None, None
+                loaded_config = await _try_load_dashboard(dashboard)
+                if loaded_config:
+                    for view in loaded_config.get("views", []):
+                        view_title = view.get("title", "")
+                        if search_lower in view_title.lower():
+                            _LOGGER.warning(
+                                f"Found '{search_substring}' in view title: "
+                                f"'{view_title}' (dashboard: '{dash_id}')"
+                            )
+                            return dash_id, dashboard, loaded_config
+            return None, None, None
         
         _LOGGER.warning("Searching for dashboard containing 'selfmon' (case-insensitive)...")
-        dash_id, dashboard = await find_dashboard_by_substring("selfmon")
-        if dashboard:
-            actual_dashboard_id = dash_id
-            target_dashboard = dashboard
-            _LOGGER.warning(f"Found SelfMon dashboard: '{dash_id}'")
-        else:
-            _LOGGER.warning("SelfMon dashboard not found, searching for dashboard containing 'security' (case-insensitive)...")
-            dash_id, dashboard = await find_dashboard_by_substring("security")
-            if dashboard:
-                actual_dashboard_id = dash_id
-                target_dashboard = dashboard
-                _LOGGER.warning(f"Found security dashboard: '{dash_id}'")
-            else:
-                _LOGGER.warning("Neither 'selfmon' nor 'security' found in dashboard names, using first available dashboard")
-                dashboard_keys = list(dashboards.keys())
-                if dashboard_keys:
-                    actual_dashboard_id = dashboard_keys[0]
-                    target_dashboard = dashboards[actual_dashboard_id]
-                    _LOGGER.warning(f"Using first available dashboard: '{actual_dashboard_id}'")
-                else:
-                    _LOGGER.error("No dashboards available")
-                    return
+        actual_dashboard_id, target_dashboard, config = await find_dashboard_by_substring(
+            "selfmon"
+        )
+        if not target_dashboard:
+            _LOGGER.warning(
+                "SelfMon dashboard not found, searching for dashboard "
+                "containing 'security' (case-insensitive)..."
+            )
+            actual_dashboard_id, target_dashboard, config = await find_dashboard_by_substring(
+                "security"
+            )
+        
+        if not target_dashboard and "lovelace" in dashboards:
+            _LOGGER.warning("Trying migrated default dashboard 'lovelace'...")
+            loaded_config = await _try_load_dashboard(dashboards["lovelace"])
+            if loaded_config is not None:
+                actual_dashboard_id = "lovelace"
+                target_dashboard = dashboards["lovelace"]
+                config = loaded_config
         
         if not target_dashboard:
-            _LOGGER.error("No dashboard available")
+            _LOGGER.warning(
+                "No suitable existing dashboard found, creating dedicated Security dashboard"
+            )
+            actual_dashboard_id, target_dashboard, config = await _get_or_create_security_dashboard(
+                hass, lovelace
+            )
+        
+        if not target_dashboard:
+            _LOGGER.warning("Trying any loadable dashboard except 'map'...")
+            for dash_id, dashboard in dashboards.items():
+                if dash_id == "map":
+                    continue
+                loaded_config = await _try_load_dashboard(dashboard)
+                if loaded_config is not None:
+                    actual_dashboard_id = dash_id
+                    target_dashboard = dashboard
+                    config = loaded_config
+                    _LOGGER.warning(f"Using loadable dashboard: '{dash_id}'")
+                    break
+        
+        if not target_dashboard or config is None:
+            _LOGGER.error(
+                "No writable dashboard available. The default dashboard is in auto-gen "
+                "mode and cannot be modified programmatically."
+            )
             return
         
         _LOGGER.warning(f"Using dashboard '{actual_dashboard_id}'")
-        _LOGGER.warning(f"Found dashboard '{actual_dashboard_id}', loading configuration...")
-        _LOGGER.warning(f"Dashboard type: {type(target_dashboard)}, has async_load: {hasattr(target_dashboard, 'async_load')}")
-        
-        try:
-            config = await target_dashboard.async_load(force=False)
-            if not config:
-                _LOGGER.error("Dashboard config is None after load")
-                return
-            _LOGGER.warning(f"Loaded dashboard config, found {len(config.get('views', []))} view(s)")
-        except Exception as load_error:
-            _LOGGER.error(f"Failed to load dashboard config: {load_error}", exc_info=True)
-            return
+        _LOGGER.warning(
+            f"Loaded dashboard config, found {len(config.get('views', []))} view(s)"
+        )
         
         views = config.get("views", [])
         
@@ -347,7 +445,13 @@ async def auto_add_cards(
                 views.append(target_view)
                 config["views"] = views
         else:
-            target_view = views[0] if views else None
+            for view in views:
+                if isinstance(view, dict) and view.get("title", "").lower() == "security":
+                    target_view = view
+                    _LOGGER.warning(f"Found existing 'Security' view in dashboard '{actual_dashboard_id}'")
+                    break
+            if not target_view:
+                target_view = views[0] if views else None
         
         if not target_view:
             _LOGGER.error("No target view available")

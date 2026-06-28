@@ -46,10 +46,10 @@ _card_schedule_handles: dict[str, callback] = {}
 DEFAULT_SECURITY_DASHBOARD_ITEM = {
     "id": SECURITY_URL_PATH,
     CONF_ALLOW_SINGLE_WORD: True,
-    CONF_ICON: "mdi:shield-home",
+    CONF_ICON: "mdi:dialpad",
     CONF_REQUIRE_ADMIN: False,
     CONF_SHOW_IN_SIDEBAR: True,
-    CONF_TITLE: "Security",
+    CONF_TITLE: "Galaxy Keypad",
     CONF_URL_PATH: SECURITY_URL_PATH,
 }
 
@@ -606,17 +606,6 @@ async def _resolve_dashboard_and_view(
         [dash_id or "default" for dash_id, _, _ in loadable],
     )
 
-    dash_id, dashboard, config = await _get_or_create_security_dashboard(
-        hass, lovelace_data
-    )
-    if dashboard and config:
-        view = _normalize_security_dashboard_view(config)
-        _LOGGER.info(
-            "Using dedicated /%s dashboard for Galaxy cards",
-            SECURITY_URL_PATH,
-        )
-        return dash_id, dashboard, config, view
-
     if area_id and area_name:
         match = _find_area_view_in_dashboards(loadable, area_id, area_name)
         if match:
@@ -627,6 +616,29 @@ async def _resolve_dashboard_and_view(
                 dash_id or "default",
             )
             return match
+
+        for prefer_id in ("lovelace", None):
+            for dash_id, dashboard, config in loadable:
+                if dash_id != prefer_id:
+                    continue
+                view = _ensure_area_view(config, area_id, area_name)
+                _LOGGER.info(
+                    "Created area view '%s' on dashboard '%s'",
+                    area_name,
+                    dash_id or "default",
+                )
+                return dash_id, dashboard, config, view
+
+    dash_id, dashboard, config = await _get_or_create_security_dashboard(
+        hass, lovelace_data
+    )
+    if dashboard and config:
+        view = _normalize_security_dashboard_view(config)
+        _LOGGER.info(
+            "Using dedicated /%s dashboard (sidebar: Galaxy Keypad)",
+            SECURITY_URL_PATH,
+        )
+        return dash_id, dashboard, config, view
 
     for substring in ("selfmon",):
         match = _find_dashboard_by_substring(loadable, substring)
@@ -748,7 +760,18 @@ async def _try_add_cards(
         return False
 
     entity_cards = _build_entity_cards(collected, entities.get("printer_log"))
-    layout = _build_three_column_layout(keypad_card, entity_cards)
+    area_id = get_entry_area_id(hass, entry)
+    area_name = _area_name(hass, area_id) if area_id else None
+    keypad_only = (
+        _dashboard_id != SECURITY_URL_PATH
+        and area_id
+        and area_name
+        and _view_matches_area(target_view, area_id, area_name)
+    )
+    if keypad_only:
+        layout = keypad_card
+    else:
+        layout = _build_three_column_layout(keypad_card, entity_cards)
     _merge_layout_into_view(target_view, layout)
 
     await target_dashboard.async_save(config)
@@ -759,9 +782,10 @@ async def _try_add_cards(
         persistent_notification.async_create(
             hass,
             (
-                "The graphical Galaxy keypad has been added to the Security dashboard. "
-                f"Open /{SECURITY_URL_PATH} in your browser, or look for "
-                "'Security' in the left sidebar after a page refresh."
+                "The graphical keypad is ready. Open **Galaxy Keypad** in the left "
+                f"sidebar, or go to /{SECURITY_URL_PATH} in your browser.\n\n"
+                "Note: The Overview → Security tab only shows entity tiles. "
+                "That is not the graphical keypad."
             ),
             title="Honeywell Galaxy",
             notification_id=f"{DOMAIN}_dashboard_cards",
@@ -771,7 +795,8 @@ async def _try_add_cards(
     dashboard_label = _dashboard_id or "default"
     if _dashboard_id == SECURITY_URL_PATH:
         location_hint = (
-            f"Open Security in the left sidebar (/{SECURITY_URL_PATH})"
+            "Open Galaxy Keypad in the left sidebar "
+            f"(/{SECURITY_URL_PATH}) — not the Overview Security tab"
         )
     else:
         location_hint = (

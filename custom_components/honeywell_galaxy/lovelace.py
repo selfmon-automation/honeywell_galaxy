@@ -176,7 +176,15 @@ async def _get_or_create_security_dashboard(
     )
     config = await _try_load_dashboard(security_dashboard)
     if config is None:
-        config = {"views": [{"title": "Security", "cards": []}]}
+        config = {
+            "views": [
+                {
+                    "title": "Security",
+                    "path": "default",
+                    "cards": [],
+                }
+            ]
+        }
         await security_dashboard.async_save(config)
 
     return SECURITY_URL_PATH, security_dashboard, config
@@ -421,6 +429,16 @@ def _area_name(hass: HomeAssistant, area_id: str) -> str | None:
     return area.name if area else None
 
 
+def _dashboard_has_strategy(config: dict) -> bool:
+    """Return True if the dashboard uses a strategy (not programmatically editable)."""
+    return "strategy" in config
+
+
+def _view_uses_sections(view: dict) -> bool:
+    """Return True if the view stores cards in sections rather than at view root."""
+    return view.get("type") == "sections" or bool(view.get("sections"))
+
+
 async def _iter_loadable_dashboards(
     lovelace_data,
 ) -> list[tuple[str | None, LovelaceStorage, dict]]:
@@ -430,8 +448,9 @@ async def _iter_loadable_dashboards(
         if dash_id == "map" or dashboard.mode != MODE_STORAGE:
             continue
         config = await _try_load_dashboard(dashboard)
-        if config is not None:
-            loadable.append((dash_id, dashboard, config))
+        if config is None or _dashboard_has_strategy(config):
+            continue
+        loadable.append((dash_id, dashboard, config))
     return loadable
 
 
@@ -553,9 +572,21 @@ async def _resolve_dashboard_and_view(
     area_name = _area_name(hass, area_id) if area_id else None
     loadable = await _iter_loadable_dashboards(lovelace_data)
 
+    _LOGGER.info(
+        "Resolving Galaxy dashboard (area=%s, loadable_dashboards=%s)",
+        area_name or "none",
+        [dash_id or "default" for dash_id, _, _ in loadable],
+    )
+
     if area_id and area_name:
         match = _find_area_view_in_dashboards(loadable, area_id, area_name)
         if match:
+            dash_id, dashboard, config, view = match
+            _LOGGER.info(
+                "Matched area view '%s' on dashboard '%s'",
+                area_name,
+                dash_id or "default",
+            )
             return match
 
         for prefer_id in ("lovelace", None):
@@ -564,7 +595,7 @@ async def _resolve_dashboard_and_view(
                     continue
                 view = _ensure_area_view(config, area_id, area_name)
                 _LOGGER.info(
-                    "Using area view '%s' on dashboard '%s'",
+                    "Created area view '%s' on dashboard '%s'",
                     area_name,
                     dash_id or "default",
                 )
@@ -573,12 +604,13 @@ async def _resolve_dashboard_and_view(
     for substring in ("selfmon", "security"):
         match = _find_dashboard_by_substring(loadable, substring)
         if match:
+            dash_id, _, _, view = match
+            _LOGGER.info(
+                "Using '%s' dashboard/view match on '%s'",
+                substring,
+                dash_id or "default",
+            )
             return match
-
-    for dash_id, dashboard, config in loadable:
-        view = _first_view(config)
-        if view is not None:
-            return dash_id, dashboard, config, view
 
     dash_id, dashboard, config = await _get_or_create_security_dashboard(
         hass, lovelace_data
@@ -587,9 +619,18 @@ async def _resolve_dashboard_and_view(
         view = _ensure_area_view(
             config,
             area_id or SECURITY_URL_PATH,
-            area_name or "Security",
+            area_name or "Galaxy",
+        )
+        _LOGGER.info(
+            "Using dedicated /%s dashboard for Galaxy cards (open it in the sidebar)",
+            SECURITY_URL_PATH,
         )
         return dash_id, dashboard, config, view
+
+    for dash_id, dashboard, config in loadable:
+        view = _first_view(config)
+        if view is not None:
+            return dash_id, dashboard, config, view
 
     return None, None, None, None
 
@@ -615,6 +656,18 @@ def _is_galaxy_layout_card(card: dict) -> bool:
 
 def _merge_layout_into_view(view: dict, layout: dict) -> None:
     """Replace any previous Galaxy layout and prepend the new one."""
+    if _view_uses_sections(view):
+        sections = view.setdefault("sections", [])
+        if not sections:
+            sections.append({"type": "grid", "cards": []})
+        first_section = sections[0]
+        cards = first_section.setdefault("cards", [])
+        first_section["cards"] = [
+            card for card in cards if not _is_galaxy_layout_card(card)
+        ]
+        first_section["cards"].insert(0, layout)
+        return
+
     cards = view.setdefault("cards", [])
     view["cards"] = [card for card in cards if not _is_galaxy_layout_card(card)]
     view["cards"].insert(0, layout)
@@ -689,13 +742,22 @@ async def _try_add_cards(
     await target_dashboard.async_save(config)
     view_label = target_view.get("title") or target_view.get("path") or "view"
     dashboard_label = _dashboard_id or "default"
+    if _dashboard_id == SECURITY_URL_PATH:
+        location_hint = (
+            f"Open Security in the left sidebar (/{SECURITY_URL_PATH})"
+        )
+    else:
+        location_hint = (
+            f"Open dashboard '{dashboard_label}' and select the '{view_label}' tab"
+        )
     _LOGGER.warning(
         "Galaxy dashboard cards saved to dashboard '%s', view '%s' "
-        "(%s zones, %s groups).",
+        "(%s zones, %s groups). %s",
         dashboard_label,
         view_label,
         len(collected["prio_zones"]),
         len(collected["groups"]),
+        location_hint,
     )
     return True
 

@@ -107,8 +107,9 @@ def register_devices(hass: HomeAssistant, entry: ConfigEntry) -> None:
 @callback
 def get_entry_area_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
     """Return the area assigned to this integration, if any."""
-    if entry.area_id:
-        return entry.area_id
+    area_id = getattr(entry, "area_id", None)
+    if area_id:
+        return area_id
 
     device_registry = dr.async_get(hass)
     devices = dr.async_entries_for_config_entry(device_registry, entry.entry_id)

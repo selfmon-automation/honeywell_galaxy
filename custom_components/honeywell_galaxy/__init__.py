@@ -12,6 +12,7 @@ from homeassistant.helpers.event import async_call_later
 from .const import DOMAIN
 from .coordinator import GalaxyCoordinator
 from .device import register_devices, sync_device_areas
+from .lovelace import auto_add_cards
 from .services import async_setup_services, async_unload_services
 
 _LOGGER = logging.getLogger(__name__)
@@ -44,6 +45,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     sync_device_areas(hass, entry)
     _async_schedule_area_syncs(hass, entry)
     entry.async_on_unload(_async_listen_for_hub_area_changes(hass, entry))
+
+    hass.async_create_task(auto_add_cards(hass, entry))
 
     return True
 

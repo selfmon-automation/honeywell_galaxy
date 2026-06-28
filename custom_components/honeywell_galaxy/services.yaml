@@ -27,3 +27,7 @@ test_mqtt:
       required: true
       selector:
         text:
+
+add_dashboard_cards:
+  name: Add Dashboard Cards
+  description: Rebuild the Galaxy Security dashboard with keypad, log, and RIO cards.

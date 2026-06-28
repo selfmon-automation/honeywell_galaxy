@@ -46,6 +46,10 @@
           "description": "Message payload"
         }
       }
+    },
+    "add_dashboard_cards": {
+      "name": "Add Dashboard Cards",
+      "description": "Rebuild the Galaxy Security dashboard with keypad, log, and RIO cards."
     }
   }
 }

@@ -8,11 +8,13 @@ from homeassistant.helpers import config_validation as cv
 import voluptuous as vol
 
 from .const import DOMAIN, TOPIC_VPRINTER
+from .lovelace import auto_add_cards
 
 _LOGGER = logging.getLogger(__name__)
 
 SERVICE_PRINT_TEXT = "print_text"
 SERVICE_TEST_MQTT = "test_mqtt"
+SERVICE_ADD_DASHBOARD_CARDS = "add_dashboard_cards"
 
 SERVICE_PRINT_TEXT_SCHEMA = vol.Schema(
     {
@@ -26,6 +28,8 @@ SERVICE_TEST_MQTT_SCHEMA = vol.Schema(
         vol.Required("payload"): cv.string,
     }
 )
+
+SERVICE_ADD_DASHBOARD_CARDS_SCHEMA = vol.Schema({})
 
 
 async def async_setup_services(hass: HomeAssistant) -> None:
@@ -77,11 +81,27 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         coordinator.publish(topic, payload)
         _LOGGER.info("MQTT test publish completed")
 
+    async def add_dashboard_cards(call: ServiceCall) -> None:
+        """Rebuild Galaxy Lovelace cards on the Security dashboard."""
+        entries = hass.config_entries.async_entries(DOMAIN)
+        if not entries:
+            _LOGGER.error("No Honeywell Galaxy integration configured")
+            return
+
+        for entry in entries:
+            await auto_add_cards(hass, entry, delay_seconds=0)
+
     hass.services.async_register(
         DOMAIN, SERVICE_PRINT_TEXT, print_text, schema=SERVICE_PRINT_TEXT_SCHEMA
     )
     hass.services.async_register(
         DOMAIN, SERVICE_TEST_MQTT, test_mqtt, schema=SERVICE_TEST_MQTT_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_ADD_DASHBOARD_CARDS,
+        add_dashboard_cards,
+        schema=SERVICE_ADD_DASHBOARD_CARDS_SCHEMA,
     )
 
 
@@ -89,3 +109,4 @@ async def async_unload_services(hass: HomeAssistant) -> None:
     """Unload services for Honeywell Galaxy."""
     hass.services.async_remove(DOMAIN, SERVICE_PRINT_TEXT)
     hass.services.async_remove(DOMAIN, SERVICE_TEST_MQTT)
+    hass.services.async_remove(DOMAIN, SERVICE_ADD_DASHBOARD_CARDS)

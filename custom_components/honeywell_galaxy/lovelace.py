@@ -35,6 +35,7 @@ from .device import get_entry_area_id
 _LOGGER = logging.getLogger(__name__)
 
 GALAXY_KEYPAD_TITLE = "Galaxy Keypad"
+GALAXY_VIEW_TITLE = "Honeywell Galaxy"
 SECURITY_URL_PATH = "security"
 DEFAULT_CARD_SETUP_DELAY = 50
 CARD_SETUP_RETRIES = (0, 45, 90)
@@ -74,7 +75,9 @@ async def _try_load_dashboard(dashboard) -> dict | None:
         return None
 
 
-async def _register_storage_dashboard_panel(hass: HomeAssistant, item: dict) -> None:
+async def _register_storage_dashboard_panel(
+    hass: HomeAssistant, item: dict, *, update: bool = False
+) -> None:
     """Register a storage-mode dashboard in the frontend."""
     from homeassistant.components import frontend
 
@@ -87,7 +90,7 @@ async def _register_storage_dashboard_panel(hass: HomeAssistant, item: dict) -> 
         sidebar_title=item[CONF_TITLE],
         sidebar_icon=item.get(CONF_ICON, DEFAULT_ICON),
         config={"mode": MODE_STORAGE},
-        update=False,
+        update=update,
     )
 
 
@@ -118,8 +121,8 @@ async def _ensure_security_dashboard_loaded(
     if SECURITY_URL_PATH not in dashboards:
         dashboards[SECURITY_URL_PATH] = LovelaceStorage(hass, item)
 
-    if not _panel_exists(hass, SECURITY_URL_PATH):
-        await _register_storage_dashboard_panel(hass, item)
+    panel_exists = _panel_exists(hass, SECURITY_URL_PATH)
+    await _register_storage_dashboard_panel(hass, item, update=panel_exists)
 
     return dashboards[SECURITY_URL_PATH]
 
@@ -179,8 +182,8 @@ async def _get_or_create_security_dashboard(
         config = {
             "views": [
                 {
-                    "title": "Security",
-                    "path": "default",
+                    "title": GALAXY_VIEW_TITLE,
+                    "path": "galaxy",
                     "cards": [],
                 }
             ]
@@ -562,6 +565,31 @@ def _find_dashboard_by_substring(
     return None
 
 
+def _normalize_security_dashboard_view(config: dict) -> dict:
+    """Collapse duplicate views on /security into one canonical tab."""
+    views = [view for view in config.get("views", []) if isinstance(view, dict)]
+    target: dict | None = None
+
+    for view in views:
+        title = view.get("title", "").casefold()
+        if title in {
+            GALAXY_VIEW_TITLE.casefold(),
+            "security",
+            "galaxy",
+            "honeywell galaxy",
+        }:
+            target = view
+            break
+
+    if target is None:
+        target = {"title": GALAXY_VIEW_TITLE, "path": "galaxy", "cards": []}
+
+    target["title"] = GALAXY_VIEW_TITLE
+    target.setdefault("path", "galaxy")
+    config["views"] = [target]
+    return target
+
+
 async def _resolve_dashboard_and_view(
     hass: HomeAssistant,
     lovelace_data,
@@ -578,6 +606,17 @@ async def _resolve_dashboard_and_view(
         [dash_id or "default" for dash_id, _, _ in loadable],
     )
 
+    dash_id, dashboard, config = await _get_or_create_security_dashboard(
+        hass, lovelace_data
+    )
+    if dashboard and config:
+        view = _normalize_security_dashboard_view(config)
+        _LOGGER.info(
+            "Using dedicated /%s dashboard for Galaxy cards",
+            SECURITY_URL_PATH,
+        )
+        return dash_id, dashboard, config, view
+
     if area_id and area_name:
         match = _find_area_view_in_dashboards(loadable, area_id, area_name)
         if match:
@@ -589,19 +628,7 @@ async def _resolve_dashboard_and_view(
             )
             return match
 
-        for prefer_id in ("lovelace", None):
-            for dash_id, dashboard, config in loadable:
-                if dash_id != prefer_id:
-                    continue
-                view = _ensure_area_view(config, area_id, area_name)
-                _LOGGER.info(
-                    "Created area view '%s' on dashboard '%s'",
-                    area_name,
-                    dash_id or "default",
-                )
-                return dash_id, dashboard, config, view
-
-    for substring in ("selfmon", "security"):
+    for substring in ("selfmon",):
         match = _find_dashboard_by_substring(loadable, substring)
         if match:
             dash_id, _, _, view = match
@@ -611,21 +638,6 @@ async def _resolve_dashboard_and_view(
                 dash_id or "default",
             )
             return match
-
-    dash_id, dashboard, config = await _get_or_create_security_dashboard(
-        hass, lovelace_data
-    )
-    if dashboard and config:
-        view = _ensure_area_view(
-            config,
-            area_id or SECURITY_URL_PATH,
-            area_name or "Galaxy",
-        )
-        _LOGGER.info(
-            "Using dedicated /%s dashboard for Galaxy cards (open it in the sidebar)",
-            SECURITY_URL_PATH,
-        )
-        return dash_id, dashboard, config, view
 
     for dash_id, dashboard, config in loadable:
         view = _first_view(config)
@@ -740,6 +752,21 @@ async def _try_add_cards(
     _merge_layout_into_view(target_view, layout)
 
     await target_dashboard.async_save(config)
+
+    if _dashboard_id == SECURITY_URL_PATH:
+        from homeassistant.components import persistent_notification
+
+        persistent_notification.async_create(
+            hass,
+            (
+                "The graphical Galaxy keypad has been added to the Security dashboard. "
+                f"Open /{SECURITY_URL_PATH} in your browser, or look for "
+                "'Security' in the left sidebar after a page refresh."
+            ),
+            title="Honeywell Galaxy",
+            notification_id=f"{DOMAIN}_dashboard_cards",
+        )
+
     view_label = target_view.get("title") or target_view.get("path") or "view"
     dashboard_label = _dashboard_id or "default"
     if _dashboard_id == SECURITY_URL_PATH:

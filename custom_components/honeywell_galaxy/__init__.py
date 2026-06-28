@@ -12,7 +12,7 @@ from homeassistant.helpers.event import async_call_later
 
 from .const import DOMAIN
 from .coordinator import GalaxyCoordinator
-from .device import get_entry_area_id, register_devices, sync_device_areas
+from .device import register_devices
 from .lovelace import auto_add_cards, schedule_add_cards
 from .services import async_setup_services, async_unload_services
 
@@ -43,8 +43,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
-    sync_device_areas(hass, entry)
-    _async_schedule_area_syncs(hass, entry)
+    _async_schedule_card_retries(hass, entry)
     entry.async_on_unload(_async_listen_for_device_area_changes(hass, entry))
 
     hass.async_create_task(auto_add_cards(hass, entry))
@@ -53,30 +52,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 @callback
-def _sync_areas_and_cards(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Sync device areas and schedule dashboard cards when an area is assigned."""
-    sync_device_areas(hass, entry)
-    if get_entry_area_id(hass, entry):
-        schedule_add_cards(hass, entry)
-
-
-@callback
-def _async_schedule_area_syncs(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Re-sync areas after setup UI may assign devices to an area."""
+def _async_schedule_card_retries(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Retry dashboard card creation after setup UI may assign device areas."""
 
     @callback
-    def _sync_areas(_now) -> None:
-        _sync_areas_and_cards(hass, entry)
+    def _retry_cards(_now) -> None:
+        hass.async_create_task(auto_add_cards(hass, entry, delay_seconds=0))
 
     for delay in AREA_SYNC_DELAYS:
-        entry.async_on_unload(async_call_later(hass, delay, _sync_areas))
+        entry.async_on_unload(async_call_later(hass, delay, _retry_cards))
 
 
 @callback
 def _async_listen_for_device_area_changes(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> callback:
-    """Propagate area changes across all integration devices."""
+    """Add dashboard cards when an integration device is assigned to an area."""
 
     @callback
     def _handle_device_registry_update(event: Event) -> None:
@@ -89,9 +80,8 @@ def _async_listen_for_device_area_changes(
         if device is None or entry.entry_id not in device.config_entries:
             return
 
-        sync_device_areas(hass, entry)
-        if get_entry_area_id(hass, entry):
-            schedule_add_cards(hass, entry)
+        if device.area_id:
+            schedule_add_cards(hass, entry, device_id=device.id)
 
     return hass.bus.async_listen(EVENT_DEVICE_REGISTRY_UPDATED, _handle_device_registry_update)
 

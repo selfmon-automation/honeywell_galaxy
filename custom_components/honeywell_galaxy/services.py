@@ -89,7 +89,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
             return
 
         for entry in entries:
-            await auto_add_cards(hass, entry, delay_seconds=0)
+            await auto_add_cards(hass, entry, delay_seconds=0, full_dashboard=True)
 
     hass.services.async_register(
         DOMAIN, SERVICE_PRINT_TEXT, print_text, schema=SERVICE_PRINT_TEXT_SCHEMA

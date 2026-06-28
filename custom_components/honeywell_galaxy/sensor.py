@@ -7,12 +7,14 @@ from typing import Any, Set
 
 from homeassistant.components.sensor import SensorEntity, SensorEntityDescription
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, TOPIC_VKP, TOPIC_VPRINTER, TOPIC_SIA4_GROUPS
 from .coordinator import GalaxyCoordinator
+from .device import groups_device_info, virtual_keypad_device_info, virtual_printer_device_info
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -117,7 +119,8 @@ class KeypadDisplaySensor(CoordinatorEntity, SensorEntity):
         self._state = ""
 
         self._attr_unique_id = f"{entry.entry_id}_keypad_{description.key}"
-        self._attr_name = f"Honeywell Galaxy {description.name}"
+        self._attr_name = description.name
+        self._attr_device_info = virtual_keypad_device_info(entry)
         self.entity_description = description
 
     async def _async_update_state(self, payload: str) -> None:
@@ -166,7 +169,9 @@ class PrinterLogSensor(CoordinatorEntity, SensorEntity):
         self._state = ""  # Initialize state to empty string
 
         self._attr_unique_id = f"{entry.entry_id}_printer_log"
-        self._attr_name = f"Honeywell Galaxy {PRINTER_SENSOR.name}"
+        self._attr_name = PRINTER_SENSOR.name
+        self._attr_entity_category = EntityCategory.DIAGNOSTIC
+        self._attr_device_info = virtual_printer_device_info(entry)
         self.entity_description = PRINTER_SENSOR
 
     async def _async_update_state(self, payload: str) -> None:
@@ -247,6 +252,7 @@ class GroupSensor(CoordinatorEntity, SensorEntity):
 
         self._attr_unique_id = f"{entry.entry_id}_group_{group_number}"
         self._attr_name = f"Group {group_number}"
+        self._attr_device_info = groups_device_info(entry)
 
     async def _async_update_state(self, payload: str) -> None:
         """Update state in the event loop."""

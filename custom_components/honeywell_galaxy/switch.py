@@ -13,6 +13,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, TOPIC_VRIO_INPUTS, TOPIC_VRIO_INPUTS_READ
 from .coordinator import GalaxyCoordinator
+from .device import virtual_rio_device_info
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -74,7 +75,7 @@ async def async_setup_entry(
         for zone_num in discovered_zones:
             entities.append(
                 VirtualRIOZone(
-                    coordinator, entry, vmodid, zone_num, f"Virtual RIO Zone {zone_num}"
+                    coordinator, entry, vmodid, zone_num, None
                 )
             )
     else:
@@ -112,7 +113,8 @@ class VirtualRIOZone(CoordinatorEntity, SwitchEntity):
         self._is_on = False
 
         self._attr_unique_id = f"{entry.entry_id}_vrio_zone_{zone_number}"
-        self._attr_name = name or f"Virtual RIO Zone {zone_number}"
+        self._attr_name = name or f"Zone {zone_number}"
+        self._attr_device_info = virtual_rio_device_info(entry)
 
     @property
     def is_on(self) -> bool:

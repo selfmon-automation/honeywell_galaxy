@@ -12,6 +12,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, TOPIC_VKP
 from .coordinator import GalaxyCoordinator
+from .device import virtual_keypad_device_info
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -83,8 +84,9 @@ class KeypadButton(CoordinatorEntity, ButtonEntity):
             key_name = "escape"
         
         self._attr_unique_id = f"{entry.entry_id}_keypad_button_{key_name}"
-        self._attr_name = f"Honeywell Galaxy {name}"
+        self._attr_name = name
         self._attr_icon = icon
+        self._attr_device_info = virtual_keypad_device_info(entry)
 
     async def async_press(self) -> None:
         """Handle the button press."""

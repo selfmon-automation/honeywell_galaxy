@@ -6,10 +6,12 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 
 from .const import DOMAIN
 from .coordinator import GalaxyCoordinator
-from .services import async_setup_services, async_unload_services, auto_add_cards
+from .device import hub_device_info
+from .services import async_setup_services, async_unload_services
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,15 +31,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
+    hub = hub_device_info(entry)
+    device_registry = dr.async_get(hass)
+    device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers=hub["identifiers"],
+        manufacturer=hub.get("manufacturer"),
+        model=hub.get("model"),
+        name=hub.get("name"),
+    )
+
     if len(hass.data[DOMAIN]) == 1:
         await async_setup_services(hass)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
-    try:
-        hass.async_create_task(auto_add_cards(hass, entry))
-    except Exception as e:
-        _LOGGER.error(f"Failed to schedule auto_add_cards: {e}", exc_info=True)
 
     return True
 

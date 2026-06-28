@@ -5,14 +5,14 @@ SelfMon VMOD available from http://www.selfmon.uk/sales/
 
 ## Credits
 
-Jason Ball for the keypad card layout used in the template
+Jason Ball for the keypad card layout used in the optional Lovelace example
 
 Guy Wells for the inspiration and his integration for the Galaxy with VMOD https://github.com./guybw/selfmon-HA
 
 
 ## Features
 
-- **Virtual Keypad**: Alarm control panel with display lines and 16-button interface
+- **Virtual Keypad**: Display lines and 16-button interface as Home Assistant entities
 - **Virtual Printer**: Sensor for printer log messages with print service
 - **Virtual RIO Zones**: Switches to control virtual zones (OPEN/CLOSED)
 - **Virtual RIO Outputs**: Binary sensors for virtual output states (On/Off)
@@ -20,7 +20,7 @@ Guy Wells for the inspiration and his integration for the Galaxy with VMOD https
 - **Physical RIO Outputs**: Binary sensors for physical output states (On/Off)
 - **Groups**: Sensors showing system group set status (Set, Unset, Part Set, Night Set)
 - **Automatic Discovery**: Automatically discovers zones, outputs, and groups from MQTT topics
-- **Automatic Dashboard Cards**: Automatically creates Lovelace cards for all entities
+- **Device-based UI**: Entities are grouped into separate devices for use with modern Home Assistant dashboards
 
 | ![](screenshots/home_assistant_integration.png)  
 
@@ -30,12 +30,9 @@ Guy Wells for the inspiration and his integration for the Galaxy with VMOD https
 Before installing this integration, ensure you have:
 
 1. **MQTT Server**: A working MQTT broker (e.g., Mosquitto) configured in Home Assistant
-2. **HACS Custom Cards** (installed via HACS):
-   - `button-card` by RomRider
-   - `stack-in-card` by custom-cards
-3. **VMOD Installed**: The SelfMon VMOD installed and sensors and outputs triggered to populate the MQTT topic paths
+2. **VMOD Installed**: The SelfMon VMOD installed and sensors and outputs triggered to populate the MQTT topic paths
 
-The custom cards are required for the automatically generated keypad interface.
+No HACS custom cards are required. The integration exposes standard Home Assistant entities and devices.
 
 ## Installation
 
@@ -68,18 +65,29 @@ The custom cards are required for the automatically generated keypad interface.
    - **Password**: (optional) MQTT password
    - **VMOD ID**: Your VMOD identifier
 
-After configuration, the integration will:
-- Automatically discover Physical RIO zones and outputs from MQTT topics
-- Automatically discover Virtual RIO zones and outputs from MQTT topics
-- Automatically discover Groups from MQTT topics
-- Automatically create Lovelace dashboard cards for:
-  - Galaxy Keypad (with display lines and all buttons)
-  - Honeywell Galaxy Log (printer log)
-  - Physical RIO Inputs (zones)
-  - Physical RIO Outputs
-  - Virtual RIO Zones
-  - Virtual RIO Outputs
-  - Groups
+After configuration, the integration will automatically discover Physical RIO zones and outputs, Virtual RIO zones and outputs, and Groups from MQTT topics.
+
+## Devices
+
+Each integration instance creates a hub device and the following child devices under **Settings > Devices & Services > Honeywell Galaxy**:
+
+| Device | Entities |
+|--------|----------|
+| **Honeywell Galaxy (vmodid)** | Hub / coordinator |
+| **Virtual Keypad** | Display Line 1, Display Line 2, 16 keypad buttons |
+| **Virtual Printer** | Printer Log (diagnostic) |
+| **Physical RIO** | Discovered zone and output binary sensors |
+| **Virtual RIO** | Discovered zone switches and output binary sensors |
+| **Galaxy Groups** | Discovered group status sensors |
+
+Add these devices to your dashboard using the standard Home Assistant UI:
+
+1. Edit your dashboard
+2. Add card → **By Device**
+3. Select the device (e.g. Virtual Keypad, Physical RIO)
+4. Choose the entities you want to display
+
+This works with the default auto-generated dashboard and any custom dashboards.
 
 ## MQTT Topics
 
@@ -133,26 +141,25 @@ data:
 After configuration, the integration automatically discovers and creates the following entities:
 
 - **Sensors**:
-  - Keypad Display Line 1 (shows the top line of the keypad display)
-  - Keypad Display Line 2 (shows the bottom line of the keypad display)
-  - Printer Log (stores last 10 log lines, full log available in attributes)
-  - Groups (one per discovered group, showing Set/Unset/Part Set/Night Set status)
+  - Display Line 1 (Virtual Keypad device)
+  - Display Line 2 (Virtual Keypad device)
+  - Printer Log (Virtual Printer device, diagnostic)
+  - Groups (Galaxy Groups device, one per discovered group)
 
-- **Buttons**: 16 Virtual Keypad buttons (1-9, 0, A>, B<, *, #, Enter, Escape)
+- **Buttons**: 16 Virtual Keypad buttons (Virtual Keypad device)
 
-- **Switches**: 
-  - Virtual RIO Zones (automatically discovered, controllable switches for OPEN/CLOSED)
+- **Switches**: Virtual RIO zone switches (Virtual RIO device)
 
-- **Binary Sensors**: 
-  - Physical RIO Zones (automatically discovered, shows Open/Closed)
-  - Physical RIO Outputs (automatically discovered, shows On/Off)
-  - Virtual RIO Outputs (automatically discovered, shows On/Off)
+- **Binary Sensors**:
+  - Physical RIO zones (Physical RIO device)
+  - Physical RIO outputs (Physical RIO device)
+  - Virtual RIO outputs (Virtual RIO device)
 
-All entities are automatically discovered from MQTT topics - no manual configuration required!
+All entities are automatically discovered from MQTT topics — no manual configuration required.
 
 ## Keypad Interface
 
-The Virtual Keypad provides 16 buttons that match the physical keypad layout:
+The Virtual Keypad device provides 16 buttons that match the physical keypad layout:
 - **Row 1**: 1, 2, 3, A>
 - **Row 2**: 4, 5, 6, B<
 - **Row 3**: 7, 8, 9, Enter (green)
@@ -160,44 +167,25 @@ The Virtual Keypad provides 16 buttons that match the physical keypad layout:
 
 Each button press publishes the corresponding key value to the MQTT topic `selfmon/vmod.{vmodid}/vkp/key`.
 
-### Automatic Keypad Card
+Add the Virtual Keypad device to your dashboard to control the panel from Home Assistant.
 
-The integration automatically creates a "Galaxy Keypad" card on your default Lovelace dashboard. This card includes:
-- **Display Line 1** and **Display Line 2** at the top (yellow background, monospace font)
-- **16 buttons** arranged in a 4x4 grid matching the physical keypad layout
+### Optional Custom Keypad Card
 
-The card is automatically added when the integration is set up - no manual configuration needed!
+For a keypad-style layout similar to the physical panel, an optional Lovelace card template is provided in `examples/lovelace_keypad_card.yaml`. This requires HACS custom cards (`button-card` and `stack-in-card`) and manual setup. Most users should use the standard device entities instead.
 
-### Automatic Dashboard Cards
+## Virtual RIO Zones
 
-The integration automatically creates the following cards on your default Lovelace dashboard:
-
-1. **Galaxy Keypad**: Full keypad interface with display lines and all buttons
-2. **Honeywell Galaxy Log**: Printer log showing the last 10 log lines
-3. **Physical RIO Inputs**: All discovered physical zones (doors, windows, motion sensors, etc.)
-4. **Physical RIO Outputs**: All discovered physical outputs (sirens, strobes, lights, etc.)
-5. **Virtual RIO Zones**: All discovered virtual zones (controllable switches)
-6. **Virtual RIO Outputs**: All discovered virtual outputs
-7. **Groups**: All discovered groups showing their set status
-
-All cards are automatically created and updated as new entities are discovered.
-
-### Virtual RIO Zones
-
-Virtual RIO Zones are controllable switches that allow you to set zones to OPEN or CLOSED. Each zone can be controlled individually - there is no master toggle to prevent accidental control of all zones at once.
+Virtual RIO Zones are controllable switches that allow you to set zones to OPEN or CLOSED. Each zone can be controlled individually — there is no master toggle to prevent accidental control of all zones at once.
 
 ## Troubleshooting
 
 - **MQTT Connection Issues**: Check that your MQTT broker is accessible and credentials are correct
-- **No Entities Appearing**: 
+- **No Entities Appearing**:
   - Ensure your VMOD ID is correct and MQTT messages are being published
-  - The integration automatically discovers entities from MQTT topics - wait a few seconds after restart for discovery to complete
+  - The integration automatically discovers entities from MQTT topics — wait up to 40 seconds after restart for discovery to complete
   - Check the Home Assistant logs for discovery messages
 - **States Not Updating**: Check MQTT topic subscriptions match your VMOD configuration
-- **Cards Not Appearing**: 
-  - Ensure HACS custom cards (`button-card` and `stack-in-card`) are installed
-  - Check that you're viewing the default Lovelace dashboard
-  - Restart Home Assistant after installing the integration
+- **Devices Not Showing**: Go to Settings > Devices & Services > Honeywell Galaxy and verify the child devices are listed
 - **Printer Log Truncated**: The sensor state is limited to 255 characters, but the full log (up to 10 lines) is available in the `log_lines` attribute
 
 ## Development
@@ -213,7 +201,7 @@ The integration uses MQTT wildcard subscriptions to automatically discover:
 - Virtual RIO outputs from `selfmon/vmod.{vmodid}/vrio/outputs/+`
 - Groups from `selfmon/vmod.{vmodid}/sia4/groups/+`
 
-Discovery runs for 10 seconds after integration setup to find all available entities.
+Discovery runs for 10 seconds per category after integration setup.
 
 ## License
 

@@ -11,7 +11,7 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntityDescription,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -22,6 +22,7 @@ from .const import (
     TOPIC_VRIO_OUTPUTS,
 )
 from .coordinator import GalaxyCoordinator
+from .device import physical_rio_device_info, virtual_rio_device_info
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -161,7 +162,7 @@ async def async_setup_entry(
                     entry,
                     vmodid,
                     zone_num,
-                    f"Physical RIO Zone {zone_num}",
+                    None,
                     BinarySensorDeviceClass.DOOR,
                 )
             )
@@ -198,7 +199,7 @@ async def async_setup_entry(
                     entry,
                     vmodid,
                     output_num,
-                    f"Physical RIO Output {output_num}",
+                    None,
                 )
             )
     else:
@@ -226,7 +227,7 @@ async def async_setup_entry(
                     entry,
                     vmodid,
                     output_num,
-                    f"Virtual RIO Output {output_num}",
+                    None,
                 )
             )
     else:
@@ -268,8 +269,9 @@ class PhysicalRIOZone(CoordinatorEntity, BinarySensorEntity):
         self._is_on = False
 
         self._attr_unique_id = f"{entry.entry_id}_prio_zone_{zone_number}"
-        self._attr_name = name or f"Physical RIO Zone {zone_number}"
+        self._attr_name = name or f"Zone {zone_number}"
         self._attr_device_class = device_class
+        self._attr_device_info = physical_rio_device_info(entry)
 
     async def _async_update_state(self, is_on: bool) -> None:
         """Update state in the event loop."""
@@ -319,8 +321,9 @@ class PhysicalRIOOutput(CoordinatorEntity, BinarySensorEntity):
         self._is_on = False
 
         self._attr_unique_id = f"{entry.entry_id}_prio_output_{output_number}"
-        self._attr_name = name or f"Physical RIO Output {output_number}"
+        self._attr_name = name or f"Output {output_number}"
         self._attr_device_class = None
+        self._attr_device_info = physical_rio_device_info(entry)
 
     async def _async_update_state(self, is_on: bool) -> None:
         """Update state in the event loop."""
@@ -350,56 +353,6 @@ class PhysicalRIOOutput(CoordinatorEntity, BinarySensorEntity):
         return self._is_on
 
 
-class VirtualRIOZone(CoordinatorEntity, BinarySensorEntity):
-    """Representation of a Virtual RIO Zone (read-only)."""
-
-    def __init__(
-        self,
-        coordinator: GalaxyCoordinator,
-        entry: ConfigEntry,
-        vmodid: str,
-        zone_number: int,
-        name: str | None = None,
-    ) -> None:
-        """Initialize the Virtual RIO Zone."""
-        super().__init__(coordinator)
-        self._entry = entry
-        self._vmodid = vmodid
-        self._zone_number = zone_number
-        self._vrio_read_topic = TOPIC_VRIO_INPUTS_READ.format(vmodid=vmodid)
-        self._is_on = False
-
-        self._attr_unique_id = f"{entry.entry_id}_vrio_zone_{zone_number}"
-        self._attr_name = name or f"Virtual RIO Zone {zone_number}"
-        self._attr_device_class = BinarySensorDeviceClass.DOOR
-
-    @property
-    def is_on(self) -> bool:
-        """Return true if the zone is open."""
-        return self._is_on
-
-    async def _async_update_state(self, is_on: bool) -> None:
-        """Update state in the event loop."""
-        self._is_on = is_on
-        self.async_write_ha_state()
-
-    async def async_added_to_hass(self) -> None:
-        """Subscribe to MQTT topics when added to hass."""
-        await super().async_added_to_hass()
-
-        read_topic = f"{self._vrio_read_topic}/{self._zone_number}"
-
-        def handle_message(topic: str, payload: str) -> None:
-            """Handle message updates from MQTT thread."""
-            payload_upper = payload.strip().upper()
-            is_on = payload_upper == "OPEN"
-            self.hass.loop.call_soon_threadsafe(
-                lambda state=is_on: self.hass.async_create_task(self._async_update_state(state))
-            )
-
-        self.coordinator.subscribe(read_topic, handle_message)
-
-
 class VirtualRIOOutput(CoordinatorEntity, BinarySensorEntity):
     """Representation of a Virtual RIO Output."""
 
@@ -420,8 +373,9 @@ class VirtualRIOOutput(CoordinatorEntity, BinarySensorEntity):
         self._is_on = False
 
         self._attr_unique_id = f"{entry.entry_id}_vrio_output_{output_number}"
-        self._attr_name = name or f"Virtual RIO Output {output_number}"
+        self._attr_name = name or f"Output {output_number}"
         self._attr_device_class = None
+        self._attr_device_info = virtual_rio_device_info(entry)
 
     async def _async_update_state(self, is_on: bool) -> None:
         """Update state in the event loop."""
@@ -449,53 +403,3 @@ class VirtualRIOOutput(CoordinatorEntity, BinarySensorEntity):
     def is_on(self) -> bool:
         """Return true if the output is on."""
         return self._is_on
-
-
-class VirtualRIOZone(CoordinatorEntity, BinarySensorEntity):
-    """Representation of a Virtual RIO Zone (read-only)."""
-
-    def __init__(
-        self,
-        coordinator: GalaxyCoordinator,
-        entry: ConfigEntry,
-        vmodid: str,
-        zone_number: int,
-        name: str | None = None,
-    ) -> None:
-        """Initialize the Virtual RIO Zone."""
-        super().__init__(coordinator)
-        self._entry = entry
-        self._vmodid = vmodid
-        self._zone_number = zone_number
-        self._vrio_read_topic = TOPIC_VRIO_INPUTS_READ.format(vmodid=vmodid)
-        self._is_on = False
-
-        self._attr_unique_id = f"{entry.entry_id}_vrio_zone_{zone_number}"
-        self._attr_name = name or f"Virtual RIO Zone {zone_number}"
-        self._attr_device_class = BinarySensorDeviceClass.DOOR
-
-    @property
-    def is_on(self) -> bool:
-        """Return true if the zone is open."""
-        return self._is_on
-
-    async def _async_update_state(self, is_on: bool) -> None:
-        """Update state in the event loop."""
-        self._is_on = is_on
-        self.async_write_ha_state()
-
-    async def async_added_to_hass(self) -> None:
-        """Subscribe to MQTT topics when added to hass."""
-        await super().async_added_to_hass()
-
-        read_topic = f"{self._vrio_read_topic}/{self._zone_number}"
-
-        def handle_message(topic: str, payload: str) -> None:
-            """Handle message updates from MQTT thread."""
-            payload_upper = payload.strip().upper()
-            is_on = payload_upper == "OPEN"
-            self.hass.loop.call_soon_threadsafe(
-                lambda state=is_on: self.hass.async_create_task(self._async_update_state(state))
-            )
-
-        self.coordinator.subscribe(read_topic, handle_message)

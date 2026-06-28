@@ -21,6 +21,7 @@ from homeassistant.components.lovelace.const import (
     MODE_STORAGE,
     ConfigNotFound,
 )
+from homeassistant.components.frontend import async_panel_exists
 from homeassistant.components.lovelace.dashboard import DashboardsCollection, LovelaceStorage
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -31,8 +32,19 @@ from .const import DOMAIN, TOPIC_VKP
 
 _LOGGER = logging.getLogger(__name__)
 
+SECURITY_URL_PATH = "security"
 DEFAULT_CARD_SETUP_DELAY = 50
 CARD_SETUP_RETRIES = (0, 45, 90)
+
+DEFAULT_SECURITY_DASHBOARD_ITEM = {
+    "id": SECURITY_URL_PATH,
+    CONF_ALLOW_SINGLE_WORD: True,
+    CONF_ICON: "mdi:shield-home",
+    CONF_REQUIRE_ADMIN: False,
+    CONF_SHOW_IN_SIDEBAR: True,
+    CONF_TITLE: "Security",
+    CONF_URL_PATH: SECURITY_URL_PATH,
+}
 
 
 async def _try_load_dashboard(dashboard) -> dict | None:
@@ -60,6 +72,39 @@ async def _register_storage_dashboard_panel(hass: HomeAssistant, item: dict) -> 
     )
 
 
+def _find_security_dashboard_item(collection: DashboardsCollection) -> dict | None:
+    """Return the Security dashboard item from the dashboards collection."""
+    if SECURITY_URL_PATH in collection.data:
+        return collection.data[SECURITY_URL_PATH]
+
+    for item in collection.async_items():
+        if item.get(CONF_URL_PATH) == SECURITY_URL_PATH:
+            return item
+
+    return None
+
+
+def _security_dashboard_item() -> dict:
+    """Return a minimal Security dashboard item for LovelaceStorage."""
+    return dict(DEFAULT_SECURITY_DASHBOARD_ITEM)
+
+
+async def _ensure_security_dashboard_loaded(
+    hass: HomeAssistant,
+    lovelace_data,
+    item: dict,
+) -> LovelaceStorage:
+    """Ensure the Security dashboard is available in Lovelace data."""
+    dashboards = lovelace_data.dashboards
+    if SECURITY_URL_PATH not in dashboards:
+        dashboards[SECURITY_URL_PATH] = LovelaceStorage(hass, item)
+
+    if not async_panel_exists(hass, SECURITY_URL_PATH):
+        await _register_storage_dashboard_panel(hass, item)
+
+    return dashboards[SECURITY_URL_PATH]
+
+
 async def _get_or_create_security_dashboard(
     hass: HomeAssistant,
     lovelace_data,
@@ -67,40 +112,55 @@ async def _get_or_create_security_dashboard(
     """Return a writable Security dashboard, creating one if needed."""
     dashboards = lovelace_data.dashboards
 
-    if "security" in dashboards:
-        config = await _try_load_dashboard(dashboards["security"])
+    if SECURITY_URL_PATH in dashboards:
+        security_dashboard = dashboards[SECURITY_URL_PATH]
+        config = await _try_load_dashboard(security_dashboard)
         if config is not None:
-            return "security", dashboards["security"], config
+            return SECURITY_URL_PATH, security_dashboard, config
 
     collection = DashboardsCollection(hass)
     await collection.async_load()
+    item = _find_security_dashboard_item(collection)
 
-    if "security" not in collection.data:
+    if item is None:
         try:
             await collection.async_create_item(
                 {
                     CONF_ALLOW_SINGLE_WORD: True,
-                    CONF_ICON: "mdi:shield-home",
-                    CONF_TITLE: "Security",
-                    CONF_URL_PATH: "security",
+                    CONF_ICON: DEFAULT_SECURITY_DASHBOARD_ITEM[CONF_ICON],
+                    CONF_TITLE: DEFAULT_SECURITY_DASHBOARD_ITEM[CONF_TITLE],
+                    CONF_URL_PATH: SECURITY_URL_PATH,
                 }
             )
-        except (HomeAssistantError, vol.Invalid) as err:
+        except HomeAssistantError as err:
+            if getattr(err, "translation_key", None) == "url_already_exists":
+                _LOGGER.info(
+                    "Security dashboard panel already registered; reusing /%s",
+                    SECURITY_URL_PATH,
+                )
+                item = _security_dashboard_item()
+            else:
+                _LOGGER.warning("Could not create security dashboard: %s", err)
+                return None, None, None
+        except vol.Invalid as err:
             _LOGGER.warning("Could not create security dashboard: %s", err)
             return None, None, None
+        else:
+            item = _find_security_dashboard_item(collection)
 
-    if "security" not in dashboards:
-        item = collection.data["security"]
-        dashboards["security"] = LovelaceStorage(hass, item)
-        await _register_storage_dashboard_panel(hass, item)
+    if item is None:
+        _LOGGER.error("Security dashboard item could not be resolved")
+        return None, None, None
 
-    security_dashboard = dashboards["security"]
+    security_dashboard = await _ensure_security_dashboard_loaded(
+        hass, lovelace_data, item
+    )
     config = await _try_load_dashboard(security_dashboard)
     if config is None:
         config = {"views": [{"title": "Security", "cards": []}]}
         await security_dashboard.async_save(config)
 
-    return "security", security_dashboard, config
+    return SECURITY_URL_PATH, security_dashboard, config
 
 
 def _collect_entities(

@@ -43,14 +43,32 @@ DEFAULT_CARD_SETUP_DELAY = 50
 CARD_SETUP_RETRIES = (0, 45, 90)
 CARD_RESCHEDULE_DELAY = 10
 
-# Common HACS resource URLs (first match wins when registering).
+# Fallback Lovelace resource URLs when www/community scanning finds nothing.
 BUTTON_CARD_RESOURCE_URLS = (
-    "/hacsfiles/button-card/button-card.js",
     "/hacsfiles/lovelace-button-card/button-card.js",
+    "/hacsfiles/button-card/button-card.js",
+    "/local/community/lovelace-button-card/button-card.js",
+    "/local/community/button-card/button-card.js",
 )
 STACK_IN_CARD_RESOURCE_URLS = (
-    "/hacsfiles/stack-in-card/stack-in-card.js",
     "/hacsfiles/lovelace-stack-in-card/stack-in-card.js",
+    "/hacsfiles/stack-in-card/stack-in-card.js",
+    "/local/community/lovelace-stack-in-card/stack-in-card.js",
+    "/local/community/stack-in-card/stack-in-card.js",
+)
+LOVELACE_RESOURCE_TARGETS = (
+    {
+        "name": "button-card",
+        "filename": "button-card.js",
+        "markers": ("button-card", "lovelace-button-card"),
+        "static_urls": BUTTON_CARD_RESOURCE_URLS,
+    },
+    {
+        "name": "stack-in-card",
+        "filename": "stack-in-card.js",
+        "markers": ("stack-in-card", "lovelace-stack-in-card"),
+        "static_urls": STACK_IN_CARD_RESOURCE_URLS,
+    },
 )
 
 _card_schedule_handles: dict[str, callback] = {}
@@ -487,6 +505,64 @@ def _build_three_column_layout(
     }
 
 
+def _community_path_for_resource_url(hass: HomeAssistant, url: str) -> Path | None:
+    """Map a /hacsfiles or /local/community URL to a file under www/community."""
+    path = url.split("?", 1)[0]
+    community = Path(hass.config.path("www")) / "community"
+
+    if path.startswith("/hacsfiles/"):
+        rel = path.removeprefix("/hacsfiles/")
+        return community / rel
+
+    if path.startswith("/local/community/"):
+        rel = path.removeprefix("/local/community/")
+        return community / rel
+
+    return None
+
+
+def _resource_file_exists(hass: HomeAssistant, url: str) -> bool:
+    """Return True when a Lovelace resource URL points at an installed file."""
+    file_path = _community_path_for_resource_url(hass, url)
+    return file_path is not None and file_path.is_file()
+
+
+def _discover_community_resource_urls(hass: HomeAssistant, filename: str) -> list[str]:
+    """Scan www/community for an installed HACS frontend file."""
+    community = Path(hass.config.path("www")) / "community"
+    if not community.is_dir():
+        return []
+
+    urls: list[str] = []
+    for js_path in community.rglob(filename):
+        if not js_path.is_file():
+            continue
+        try:
+            rel = js_path.relative_to(community)
+        except ValueError:
+            continue
+        rel_posix = rel.as_posix()
+        for prefix in ("/hacsfiles/", "/local/community/"):
+            url = f"{prefix}{rel_posix}"
+            if url not in urls:
+                urls.append(url)
+    return urls
+
+
+def _resource_candidates(
+    hass: HomeAssistant, *, filename: str, static_urls: tuple[str, ...]
+) -> list[str]:
+    """Return deduplicated Lovelace resource URLs, preferring installed files."""
+    discovered = _discover_community_resource_urls(hass, filename)
+    installed = [url for url in discovered if _resource_file_exists(hass, url)]
+    ordered: list[str] = []
+
+    for url in (*installed, *discovered, *static_urls):
+        if url not in ordered:
+            ordered.append(url)
+    return ordered
+
+
 async def _ensure_lovelace_resources(hass: HomeAssistant) -> bool:
     """Ensure button-card and stack-in-card are registered for Lovelace."""
     lovelace_data = hass.data.get(LOVELACE_DATA)
@@ -503,39 +579,72 @@ async def _ensure_lovelace_resources(hass: HomeAssistant) -> bool:
 
     existing_urls = [item["url"] for item in resources.async_items()]
 
-    def _resource_registered(name: str) -> bool:
-        return any(name in url for url in existing_urls)
+    def _resource_registered(markers: tuple[str, ...]) -> bool:
+        for url in existing_urls:
+            url_lower = url.lower()
+            if any(marker in url_lower for marker in markers):
+                return True
+        return False
 
-    required = (
-        ("button-card", BUTTON_CARD_RESOURCE_URLS),
-        ("stack-in-card", STACK_IN_CARD_RESOURCE_URLS),
-    )
     added: list[str] = []
+    missing_install: list[str] = []
 
-    for name, candidates in required:
-        if _resource_registered(name):
+    for target in LOVELACE_RESOURCE_TARGETS:
+        name = target["name"]
+        markers = target["markers"]
+        if _resource_registered(markers):
             continue
+
+        candidates = _resource_candidates(
+            hass,
+            filename=target["filename"],
+            static_urls=target["static_urls"],
+        )
+        registered = False
+
         for url in candidates:
+            if not _resource_file_exists(hass, url):
+                continue
             try:
                 await resources.async_create_item({"url": url, "type": "module"})
                 existing_urls.append(url)
                 added.append(url)
+                registered = True
                 break
             except Exception as err:
-                _LOGGER.debug("Could not register Lovelace resource %s: %s", url, err)
+                _LOGGER.warning(
+                    "Could not register Lovelace resource %s: %s", url, err
+                )
+
+        if not registered and not any(
+            _resource_file_exists(hass, url) for url in candidates
+        ):
+            missing_install.append(name)
 
     if added:
         _LOGGER.info("Registered Lovelace resources: %s", ", ".join(added))
 
-    missing = [name for name, _ in required if not _resource_registered(name)]
+    missing = [
+        target["name"]
+        for target in LOVELACE_RESOURCE_TARGETS
+        if not _resource_registered(target["markers"])
+    ]
     if missing:
-        _LOGGER.warning(
-            "Missing Lovelace resources for the graphical keypad: %s. "
-            "Install button-card and stack-in-card via HACS, confirm they appear "
-            "under Settings → Dashboards → Resources, then run "
-            "honeywell_galaxy.add_dashboard_cards again.",
-            ", ".join(missing),
-        )
+        if missing_install:
+            _LOGGER.warning(
+                "Missing Lovelace resources for the graphical keypad: %s. "
+                "Install the missing card(s) from HACS (Frontend plugins), then "
+                "use each card's HACS menu → Add to Lovelace resources, or run "
+                "honeywell_galaxy.add_dashboard_cards again.",
+                ", ".join(missing_install),
+            )
+        else:
+            _LOGGER.warning(
+                "Lovelace resources not registered for the graphical keypad: %s. "
+                "Open Settings → Dashboards → Resources and add them, or run "
+                "honeywell_galaxy.add_dashboard_cards again.",
+                ", ".join(missing),
+            )
         return False
 
     return True
@@ -935,9 +1044,10 @@ async def _try_add_cards(
         resource_hint = ""
         if not resources_ok:
             resource_hint = (
-                "\n\nCustom cards are missing from Dashboard Resources. "
-                "Install **button-card** and **stack-in-card** via HACS, verify "
-                "they appear under Settings → Dashboards → Resources, then run "
+                "\n\nThe graphical keypad requires **button-card** (RomRider) and "
+                "**stack-in-card** (custom-cards) from HACS. Install any missing "
+                "plugins, add them under Settings → Dashboards → Resources, hard-"
+                "refresh the browser (Cmd+Shift+R), then run "
                 "**honeywell_galaxy.add_dashboard_cards** again."
             )
 

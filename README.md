@@ -77,11 +77,10 @@ After configuration, the integration will automatically discover Physical RIO zo
 
 ## Devices
 
-Each integration instance creates a hub device and the following child devices under **Settings > Devices & Services > Honeywell Galaxy**:
+Each integration instance creates the following devices under **Settings > Devices & Services > Honeywell Galaxy**:
 
 | Device | Entities |
 |--------|----------|
-| **Honeywell Galaxy (vmodid)** | Hub / coordinator |
 | **Virtual Keypad** | Display Line 1, Display Line 2, 16 keypad buttons |
 | **Virtual Printer** | Printer Log (diagnostic) |
 | **Physical RIO** | Discovered zone and output binary sensors |

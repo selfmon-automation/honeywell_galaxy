@@ -20,17 +20,6 @@ from .const import (
 MANUFACTURER = "SelfMon"
 
 
-def hub_device_info(entry: ConfigEntry) -> DeviceInfo:
-    """Return device info for the Honeywell Galaxy hub."""
-    vmodid = entry.data.get("vmodid", "")
-    return DeviceInfo(
-        identifiers={(DOMAIN, entry.entry_id)},
-        name=entry.title or f"Honeywell Galaxy ({vmodid})",
-        manufacturer=MANUFACTURER,
-        model=f"VMOD {vmodid}",
-    )
-
-
 def virtual_keypad_device_info(entry: ConfigEntry) -> DeviceInfo:
     """Return device info for the Virtual Keypad."""
     return DeviceInfo(
@@ -38,7 +27,6 @@ def virtual_keypad_device_info(entry: ConfigEntry) -> DeviceInfo:
         name="Virtual Keypad",
         manufacturer=MANUFACTURER,
         model="VMOD Virtual Keypad",
-        via_device=(DOMAIN, entry.entry_id),
     )
 
 
@@ -49,7 +37,6 @@ def virtual_printer_device_info(entry: ConfigEntry) -> DeviceInfo:
         name="Virtual Printer",
         manufacturer=MANUFACTURER,
         model="VMOD Virtual Printer",
-        via_device=(DOMAIN, entry.entry_id),
     )
 
 
@@ -60,7 +47,6 @@ def physical_rio_device_info(entry: ConfigEntry) -> DeviceInfo:
         name="Physical RIO",
         manufacturer=MANUFACTURER,
         model="VMOD Physical RIO",
-        via_device=(DOMAIN, entry.entry_id),
     )
 
 
@@ -71,7 +57,6 @@ def virtual_rio_device_info(entry: ConfigEntry) -> DeviceInfo:
         name="Virtual RIO",
         manufacturer=MANUFACTURER,
         model="VMOD Virtual RIO",
-        via_device=(DOMAIN, entry.entry_id),
     )
 
 
@@ -82,7 +67,6 @@ def groups_device_info(entry: ConfigEntry) -> DeviceInfo:
         name="Galaxy Groups",
         manufacturer=MANUFACTURER,
         model="VMOD SIA4 Groups",
-        via_device=(DOMAIN, entry.entry_id),
     )
 
 
@@ -109,11 +93,11 @@ def _device_info_to_registry_kwargs(info: DeviceInfo) -> dict:
 
 
 def register_devices(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Register hub and child devices before entities are created."""
+    """Register child devices before entities are created."""
     device_registry = dr.async_get(hass)
-    all_device_infos = [hub_device_info(entry), *[fn(entry) for fn in CHILD_DEVICE_INFO_FACTORIES]]
 
-    for info in all_device_infos:
+    for factory in CHILD_DEVICE_INFO_FACTORIES:
+        info = factory(entry)
         device_registry.async_get_or_create(
             config_entry_id=entry.entry_id,
             **_device_info_to_registry_kwargs(info),
@@ -122,14 +106,16 @@ def register_devices(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 @callback
 def sync_device_areas(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Copy the hub device area to all child devices."""
+    """Copy area assignment from any configured device to all sibling devices."""
     device_registry = dr.async_get(hass)
-    hub = device_registry.async_get_device(identifiers={(DOMAIN, entry.entry_id)})
-    if hub is None or hub.area_id is None:
+    devices = dr.async_entries_for_config_entry(device_registry, entry.entry_id)
+    if not devices:
         return
 
-    for factory in CHILD_DEVICE_INFO_FACTORIES:
-        info = factory(entry)
-        device = device_registry.async_get_device(identifiers=info["identifiers"])
-        if device is not None and device.area_id != hub.area_id:
-            device_registry.async_update_device(device.id, area_id=hub.area_id)
+    source_area = next((device.area_id for device in devices if device.area_id), None)
+    if source_area is None:
+        return
+
+    for device in devices:
+        if device.area_id != source_area:
+            device_registry.async_update_device(device.id, area_id=source_area)

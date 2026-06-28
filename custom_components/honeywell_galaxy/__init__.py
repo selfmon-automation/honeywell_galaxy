@@ -76,7 +76,7 @@ def _async_listen_for_hub_area_changes(
 
         device_registry = dr.async_get(hass)
         device = device_registry.async_get(event["device_id"])
-        if device is None or (DOMAIN, entry.entry_id) not in device.identifiers:
+        if device is None or entry.entry_id not in device.config_entries:
             return
 
         sync_device_areas(hass, entry)

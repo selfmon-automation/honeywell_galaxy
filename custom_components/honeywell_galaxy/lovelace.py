@@ -24,17 +24,24 @@ from homeassistant.components.lovelace.const import (
 from homeassistant.components.frontend import async_panel_exists
 from homeassistant.components.lovelace.dashboard import DashboardsCollection, LovelaceStorage
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.event import async_call_later
 
 from .const import DOMAIN, TOPIC_VKP
+from .device import get_entry_area_id
 
 _LOGGER = logging.getLogger(__name__)
 
+GALAXY_KEYPAD_TITLE = "Galaxy Keypad"
 SECURITY_URL_PATH = "security"
 DEFAULT_CARD_SETUP_DELAY = 50
 CARD_SETUP_RETRIES = (0, 45, 90)
+CARD_RESCHEDULE_DELAY = 10
+
+_card_schedule_handles: dict[str, callback] = {}
 
 DEFAULT_SECURITY_DASHBOARD_ITEM = {
     "id": SECURITY_URL_PATH,
@@ -396,31 +403,226 @@ def _build_three_column_layout(
     return {"type": "horizontal-stack", "cards": columns}
 
 
-async def _resolve_dashboard(
-    hass: HomeAssistant, lovelace_data
-) -> tuple[str | None, LovelaceStorage | None, dict | None]:
-    """Always use the dedicated Security dashboard at /security."""
-    return await _get_or_create_security_dashboard(hass, lovelace_data)
+def _area_name(hass: HomeAssistant, area_id: str) -> str | None:
+    """Return the friendly name for an area id."""
+    area = ar.async_get(hass).async_get_area(area_id)
+    return area.name if area else None
 
 
-def _resolve_security_view(
-    config: dict,
+async def _iter_loadable_dashboards(
+    lovelace_data,
+) -> list[tuple[str | None, LovelaceStorage, dict]]:
+    """Return storage dashboards that can be loaded and saved."""
+    loadable: list[tuple[str | None, LovelaceStorage, dict]] = []
+    for dash_id, dashboard in lovelace_data.dashboards.items():
+        if dash_id == "map" or dashboard.mode != MODE_STORAGE:
+            continue
+        config = await _try_load_dashboard(dashboard)
+        if config is not None:
+            loadable.append((dash_id, dashboard, config))
+    return loadable
+
+
+def _card_references_area(card: dict, area_id: str) -> bool:
+    """Return True if a card represents the given area."""
+    if card.get("type") == "area" and card.get("area") == area_id:
+        return True
+
+    for key in ("cards", "sections"):
+        for item in card.get(key, []):
+            if isinstance(item, dict):
+                if key == "sections":
+                    for section_card in item.get("cards", []):
+                        if isinstance(section_card, dict) and _card_references_area(
+                            section_card, area_id
+                        ):
+                            return True
+                elif _card_references_area(item, area_id):
+                    return True
+    return False
+
+
+def _view_matches_area(
+    view: dict, area_id: str, area_name: str | None
+) -> bool:
+    """Return True if a Lovelace view belongs to the given area."""
+    if view.get("path") == area_id:
+        return True
+    if area_name and view.get("title", "").casefold() == area_name.casefold():
+        return True
+    return any(
+        isinstance(card, dict) and _card_references_area(card, area_id)
+        for card in view.get("cards", [])
+    )
+
+
+def _find_view_by_title(config: dict, title: str) -> dict | None:
+    """Return the first view whose title matches case-insensitively."""
+    for view in config.get("views", []):
+        if isinstance(view, dict) and view.get("title", "").casefold() == title.casefold():
+            return view
+    return None
+
+
+def _first_view(config: dict) -> dict | None:
+    """Return the first view in a dashboard config."""
+    views = config.get("views", [])
+    if views and isinstance(views[0], dict):
+        return views[0]
+    return None
+
+
+def _ensure_area_view(
+    config: dict, area_id: str, area_name: str
 ) -> dict:
-    """Return the Security view on the Security dashboard."""
+    """Return an existing area view or append one to the dashboard."""
     views = config.setdefault("views", [])
-
     for view in views:
-        if isinstance(view, dict) and view.get("title", "").lower() == "security":
+        if isinstance(view, dict) and _view_matches_area(view, area_id, area_name):
             return view
 
-    if views and isinstance(views[0], dict):
-        views[0]["title"] = "Security"
-        views[0].setdefault("cards", [])
-        return views[0]
-
-    view = {"title": "Security", "path": "default", "cards": []}
+    view = {"title": area_name, "path": area_id, "cards": []}
     views.append(view)
     return view
+
+
+def _find_area_view_in_dashboards(
+    loadable: list[tuple[str | None, LovelaceStorage, dict]],
+    area_id: str,
+    area_name: str,
+) -> tuple[str | None, LovelaceStorage, dict, dict] | None:
+    """Find a dashboard view that matches the assigned device area."""
+    preferred_ids: list[str | None] = []
+    for dash_id, _, _ in loadable:
+        if dash_id in (None, "lovelace") and dash_id not in preferred_ids:
+            preferred_ids.insert(0, dash_id)
+        elif dash_id not in preferred_ids:
+            preferred_ids.append(dash_id)
+
+    for dash_id in preferred_ids:
+        for candidate_id, dashboard, config in loadable:
+            if candidate_id != dash_id:
+                continue
+            for view in config.get("views", []):
+                if isinstance(view, dict) and _view_matches_area(
+                    view, area_id, area_name
+                ):
+                    return candidate_id, dashboard, config, view
+    return None
+
+
+def _find_dashboard_by_substring(
+    loadable: list[tuple[str | None, LovelaceStorage, dict]],
+    search: str,
+) -> tuple[str | None, LovelaceStorage, dict, dict] | None:
+    """Find a dashboard or view containing the search substring."""
+    search_lower = search.casefold()
+    for dash_id, dashboard, config in loadable:
+        if dash_id and search_lower in str(dash_id).casefold():
+            view = _find_view_by_title(config, "security") or _first_view(config)
+            if view is not None:
+                return dash_id, dashboard, config, view
+
+        for view in config.get("views", []):
+            if not isinstance(view, dict):
+                continue
+            if search_lower in view.get("title", "").casefold():
+                return dash_id, dashboard, config, view
+    return None
+
+
+async def _resolve_dashboard_and_view(
+    hass: HomeAssistant,
+    lovelace_data,
+    entry: ConfigEntry,
+) -> tuple[str | None, LovelaceStorage | None, dict | None, dict | None]:
+    """Find a writable dashboard view for the integration's assigned area."""
+    area_id = get_entry_area_id(hass, entry)
+    area_name = _area_name(hass, area_id) if area_id else None
+    loadable = await _iter_loadable_dashboards(lovelace_data)
+
+    if area_id and area_name:
+        match = _find_area_view_in_dashboards(loadable, area_id, area_name)
+        if match:
+            return match
+
+        for prefer_id in ("lovelace", None):
+            for dash_id, dashboard, config in loadable:
+                if dash_id != prefer_id:
+                    continue
+                view = _ensure_area_view(config, area_id, area_name)
+                _LOGGER.info(
+                    "Using area view '%s' on dashboard '%s'",
+                    area_name,
+                    dash_id or "default",
+                )
+                return dash_id, dashboard, config, view
+
+    for substring in ("selfmon", "security"):
+        match = _find_dashboard_by_substring(loadable, substring)
+        if match:
+            return match
+
+    for dash_id, dashboard, config in loadable:
+        view = _first_view(config)
+        if view is not None:
+            return dash_id, dashboard, config, view
+
+    dash_id, dashboard, config = await _get_or_create_security_dashboard(
+        hass, lovelace_data
+    )
+    if dashboard and config:
+        view = _ensure_area_view(
+            config,
+            area_id or SECURITY_URL_PATH,
+            area_name or "Security",
+        )
+        return dash_id, dashboard, config, view
+
+    return None, None, None, None
+
+
+def _is_galaxy_layout_card(card: dict) -> bool:
+    """Return True if a card is part of a previous Galaxy dashboard layout."""
+    if card.get("title") == GALAXY_KEYPAD_TITLE:
+        return True
+    if card.get("type") == "custom:stack-in-card":
+        return any(
+            sub.get("name") == "VKPDisplay"
+            for sub in card.get("cards", [])
+            if isinstance(sub, dict)
+        )
+    if card.get("type") in ("horizontal-stack", "vertical-stack"):
+        return any(
+            _is_galaxy_layout_card(sub)
+            for sub in card.get("cards", [])
+            if isinstance(sub, dict)
+        )
+    return False
+
+
+def _merge_layout_into_view(view: dict, layout: dict) -> None:
+    """Replace any previous Galaxy layout and prepend the new one."""
+    cards = view.setdefault("cards", [])
+    view["cards"] = [card for card in cards if not _is_galaxy_layout_card(card)]
+    view["cards"].insert(0, layout)
+
+
+@callback
+def schedule_add_cards(
+    hass: HomeAssistant, entry: ConfigEntry, delay_seconds: int = CARD_RESCHEDULE_DELAY
+) -> None:
+    """Debounce dashboard card creation after area assignment changes."""
+    entry_id = entry.entry_id
+    if entry_id in _card_schedule_handles:
+        _card_schedule_handles[entry_id]()
+
+    @callback
+    def _run(_now) -> None:
+        _card_schedule_handles.pop(entry_id, None)
+        hass.async_create_task(auto_add_cards(hass, entry, delay_seconds=0))
+
+    _card_schedule_handles[entry_id] = async_call_later(hass, delay_seconds, _run)
 
 
 async def _try_add_cards(
@@ -451,22 +653,35 @@ async def _try_add_cards(
         _LOGGER.error("Lovelace dashboards not available")
         return False
 
-    _dashboard_id, target_dashboard, config = await _resolve_dashboard(
-        hass, lovelace
+    _dashboard_id, target_dashboard, config, target_view = (
+        await _resolve_dashboard_and_view(hass, lovelace, entry)
     )
-    if not target_dashboard or config is None:
-        _LOGGER.error("No writable Security dashboard available for Galaxy cards")
+    if not target_dashboard or config is None or target_view is None:
+        area_id = get_entry_area_id(hass, entry)
+        if area_id is None:
+            _LOGGER.warning(
+                "No area assigned to Honeywell Galaxy devices yet. "
+                "Assign an area in device settings, then run "
+                "honeywell_galaxy.add_dashboard_cards."
+            )
+        else:
+            _LOGGER.error(
+                "No writable Lovelace dashboard available for Galaxy cards"
+            )
         return False
 
-    target_view = _resolve_security_view(config)
     entity_cards = _build_entity_cards(collected, entities.get("printer_log"))
     layout = _build_three_column_layout(keypad_card, entity_cards)
-    target_view["cards"] = [layout]
+    _merge_layout_into_view(target_view, layout)
 
     await target_dashboard.async_save(config)
+    view_label = target_view.get("title") or target_view.get("path") or "view"
+    dashboard_label = _dashboard_id or "default"
     _LOGGER.warning(
-        "Galaxy dashboard cards saved to /security (%s zones, %s groups). "
-        "Open the Security item in the sidebar to view the graphical keypad.",
+        "Galaxy dashboard cards saved to dashboard '%s', view '%s' "
+        "(%s zones, %s groups).",
+        dashboard_label,
+        view_label,
         len(collected["prio_zones"]),
         len(collected["groups"]),
     )
@@ -478,9 +693,10 @@ async def auto_add_cards(
     entry: ConfigEntry,
     delay_seconds: int = DEFAULT_CARD_SETUP_DELAY,
 ) -> None:
-    """Add Galaxy Lovelace cards to the Security dashboard."""
-    _LOGGER.info("Galaxy dashboard cards scheduled in %s seconds", delay_seconds)
-    await asyncio.sleep(delay_seconds)
+    """Add Galaxy Lovelace cards to the dashboard view for the assigned area."""
+    if delay_seconds:
+        _LOGGER.info("Galaxy dashboard cards scheduled in %s seconds", delay_seconds)
+        await asyncio.sleep(delay_seconds)
 
     try:
         for attempt, retry_delay in enumerate(CARD_SETUP_RETRIES):

@@ -12,8 +12,8 @@ from homeassistant.helpers.event import async_call_later
 
 from .const import DOMAIN
 from .coordinator import GalaxyCoordinator
-from .device import register_devices, sync_device_areas
-from .lovelace import auto_add_cards
+from .device import get_entry_area_id, register_devices, sync_device_areas
+from .lovelace import auto_add_cards, schedule_add_cards
 from .services import async_setup_services, async_unload_services
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,12 +53,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 @callback
+def _sync_areas_and_cards(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Sync device areas and schedule dashboard cards when an area is assigned."""
+    sync_device_areas(hass, entry)
+    if get_entry_area_id(hass, entry):
+        schedule_add_cards(hass, entry)
+
+
+@callback
 def _async_schedule_area_syncs(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Re-sync areas after setup UI may assign the hub to an area."""
+    """Re-sync areas after setup UI may assign devices to an area."""
 
     @callback
     def _sync_areas(_now) -> None:
-        sync_device_areas(hass, entry)
+        _sync_areas_and_cards(hass, entry)
 
     for delay in AREA_SYNC_DELAYS:
         entry.async_on_unload(async_call_later(hass, delay, _sync_areas))
@@ -82,6 +90,8 @@ def _async_listen_for_device_area_changes(
             return
 
         sync_device_areas(hass, entry)
+        if get_entry_area_id(hass, entry):
+            schedule_add_cards(hass, entry)
 
     return hass.bus.async_listen(EVENT_DEVICE_REGISTRY_UPDATED, _handle_device_registry_update)
 

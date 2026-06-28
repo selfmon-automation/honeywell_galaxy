@@ -105,6 +105,17 @@ def register_devices(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 
 @callback
+def get_entry_area_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
+    """Return the area assigned to this integration, if any."""
+    if entry.area_id:
+        return entry.area_id
+
+    device_registry = dr.async_get(hass)
+    devices = dr.async_entries_for_config_entry(device_registry, entry.entry_id)
+    return next((device.area_id for device in devices if device.area_id), None)
+
+
+@callback
 def sync_device_areas(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Copy area assignment from any configured device to all sibling devices."""
     device_registry = dr.async_get(hass)

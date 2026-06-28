@@ -82,7 +82,7 @@ async def async_setup_services(hass: HomeAssistant) -> None:
         _LOGGER.info("MQTT test publish completed")
 
     async def add_dashboard_cards(call: ServiceCall) -> None:
-        """Rebuild Galaxy Lovelace cards on the Security dashboard."""
+        """Rebuild Galaxy Lovelace cards on the assigned area dashboard view."""
         entries = hass.config_entries.async_entries(DOMAIN)
         if not entries:
             _LOGGER.error("No Honeywell Galaxy integration configured")

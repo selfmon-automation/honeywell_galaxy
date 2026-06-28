@@ -67,7 +67,7 @@ Before installing this integration, ensure you have:
    - **Password**: (optional) MQTT password
    - **VMOD ID**: Your VMOD identifier
 
-After configuration, the integration will automatically discover Physical RIO zones and outputs, Virtual RIO zones and outputs, and Groups from MQTT topics. After discovery completes (~50 seconds), it automatically creates a **Security** dashboard with:
+After configuration, the integration will automatically discover Physical RIO zones and outputs, Virtual RIO zones and outputs, and Groups from MQTT topics. After discovery completes (~50 seconds), it automatically adds a graphical dashboard layout to the **Lovelace view for the area you assign** to the Honeywell Galaxy devices:
 
 - Galaxy Keypad (graphical keypad with display lines)
 - Honeywell Galaxy Log (printer log)
@@ -87,7 +87,7 @@ Each integration instance creates the following devices under **Settings > Devic
 | **Virtual RIO** | Discovered zone switches and output binary sensors |
 | **Galaxy Groups** | Discovered group status sensors |
 
-Add these devices to your dashboard using the standard Home Assistant UI, or use the automatically created Security dashboard.
+Add these devices to your dashboard using the standard Home Assistant UI, or open the dashboard view for the area you assigned during setup.
 
 To rebuild the dashboard cards manually:
 
@@ -177,11 +177,11 @@ The Virtual Keypad device provides 16 buttons that match the physical keypad lay
 
 Each button press publishes the corresponding key value to the MQTT topic `selfmon/vmod.{vmodid}/vkp/key`.
 
-The graphical keypad is **not** shown on the device page. After setup, open **Security** in the left sidebar (`/security`).
+The graphical keypad is **not** shown on the device page. After setup, assign the Honeywell Galaxy devices to an area, then open that area's dashboard view (or the view created for that area on your default dashboard).
 
-Add the Virtual Keypad device to your dashboard, or use the automatically created Galaxy Keypad card on the Security dashboard.
+Add the Virtual Keypad device to your dashboard manually, or use the automatically added Galaxy Keypad card on the area view.
 
-The Security dashboard is created automatically at `/security` in the sidebar. It requires HACS custom cards (`button-card` and `stack-in-card`).
+The graphical layout requires HACS custom cards (`button-card` and `stack-in-card`). If no area is assigned yet, cards are not created until you assign one and run `honeywell_galaxy.add_dashboard_cards` or wait for the automatic retry.
 
 ### Optional Custom Keypad Card
 
@@ -200,7 +200,7 @@ Virtual RIO Zones are controllable switches that allow you to set zones to OPEN 
   - Check the Home Assistant logs for discovery messages
 - **States Not Updating**: Check MQTT topic subscriptions match your VMOD configuration
 - **Devices Not Showing**: Go to Settings > Devices & Services > Honeywell Galaxy and verify the child devices are listed
-- **Dashboard Cards Not Appearing**: Wait ~60 seconds after setup for MQTT discovery, then check the **Security** dashboard in the sidebar. Requires HACS `button-card` and `stack-in-card`. Run `honeywell_galaxy.add_dashboard_cards` to rebuild.
+- **Dashboard Cards Not Appearing**: Assign Honeywell Galaxy devices to an area during or after setup. Wait ~60 seconds for MQTT discovery, then check that area's dashboard view. Requires HACS `button-card` and `stack-in-card`. Run `honeywell_galaxy.add_dashboard_cards` to rebuild.
 - **Printer Log Truncated**: The sensor state is limited to 255 characters, but the full log (up to 10 lines) is available in the `log_lines` attribute
 
 ## Development

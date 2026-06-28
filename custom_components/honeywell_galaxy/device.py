@@ -38,7 +38,7 @@ def virtual_keypad_device_info(entry: ConfigEntry) -> DeviceInfo:
         name="Virtual Keypad",
         manufacturer=MANUFACTURER,
         model="VMOD Virtual Keypad",
-        via_device={(DOMAIN, entry.entry_id)},
+        via_device=(DOMAIN, entry.entry_id),
     )
 
 
@@ -49,7 +49,7 @@ def virtual_printer_device_info(entry: ConfigEntry) -> DeviceInfo:
         name="Virtual Printer",
         manufacturer=MANUFACTURER,
         model="VMOD Virtual Printer",
-        via_device={(DOMAIN, entry.entry_id)},
+        via_device=(DOMAIN, entry.entry_id),
     )
 
 
@@ -60,7 +60,7 @@ def physical_rio_device_info(entry: ConfigEntry) -> DeviceInfo:
         name="Physical RIO",
         manufacturer=MANUFACTURER,
         model="VMOD Physical RIO",
-        via_device={(DOMAIN, entry.entry_id)},
+        via_device=(DOMAIN, entry.entry_id),
     )
 
 
@@ -71,7 +71,7 @@ def virtual_rio_device_info(entry: ConfigEntry) -> DeviceInfo:
         name="Virtual RIO",
         manufacturer=MANUFACTURER,
         model="VMOD Virtual RIO",
-        via_device={(DOMAIN, entry.entry_id)},
+        via_device=(DOMAIN, entry.entry_id),
     )
 
 
@@ -82,7 +82,7 @@ def groups_device_info(entry: ConfigEntry) -> DeviceInfo:
         name="Galaxy Groups",
         manufacturer=MANUFACTURER,
         model="VMOD SIA4 Groups",
-        via_device={(DOMAIN, entry.entry_id)},
+        via_device=(DOMAIN, entry.entry_id),
     )
 
 

@@ -32,6 +32,7 @@ from .const import DOMAIN, TOPIC_VKP
 _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_CARD_SETUP_DELAY = 50
+CARD_SETUP_RETRIES = (0, 45, 90)
 
 
 async def _try_load_dashboard(dashboard) -> dict | None:
@@ -150,22 +151,32 @@ def _collect_entities(
 
 
 async def _wait_for_entities(
-    hass: HomeAssistant, entry_id: str, timeout: int = 60
+    hass: HomeAssistant, entry_id: str, timeout: int = 90
 ) -> dict[str, Any]:
-    """Wait for MQTT discovery to populate entities before building cards."""
+    """Wait for keypad display entities and MQTT discovery before building cards."""
     entity_registry = er.async_get(hass)
 
-    for _ in range(timeout):
+    for second in range(timeout):
         collected = _collect_entities(entity_registry, entry_id)
-        if (
-            collected["entities"].get("display_line1")
-            and collected["entities"].get("display_line2")
-            and (
-                collected["prio_zones"]
-                or collected["groups"]
-                or collected["vrio_zones"]
+        entities = collected["entities"]
+        if not entities.get("display_line1") or not entities.get("display_line2"):
+            await asyncio.sleep(1)
+            continue
+
+        discovered = (
+            collected["prio_zones"]
+            or collected["prio_outputs"]
+            or collected["groups"]
+            or collected["vrio_zones"]
+            or collected["vrio_outputs"]
+        )
+        if discovered or second >= 60:
+            _LOGGER.info(
+                "Entity collection ready after %ss: %s zones, %s groups",
+                second,
+                len(collected["prio_zones"]),
+                len(collected["groups"]),
             )
-        ):
             return collected
         await asyncio.sleep(1)
 
@@ -328,53 +339,78 @@ def _build_three_column_layout(
 async def _resolve_dashboard(
     hass: HomeAssistant, lovelace_data
 ) -> tuple[str | None, LovelaceStorage | None, dict | None]:
-    """Find or create a writable dashboard for Galaxy cards."""
-    dashboards = lovelace_data.dashboards
-
-    async def find_dashboard_by_substring(search_substring: str):
-        search_lower = search_substring.lower()
-        for dash_id, dashboard in dashboards.items():
-            if dash_id and isinstance(dash_id, str) and search_lower in dash_id.lower():
-                loaded_config = await _try_load_dashboard(dashboard)
-                if loaded_config is not None:
-                    return dash_id, dashboard, loaded_config
-
-            loaded_config = await _try_load_dashboard(dashboard)
-            if loaded_config:
-                for view in loaded_config.get("views", []):
-                    if search_lower in view.get("title", "").lower():
-                        return dash_id, dashboard, loaded_config
-        return None, None, None
-
-    for term in ("selfmon", "security"):
-        dash_id, dashboard, config = await find_dashboard_by_substring(term)
-        if dashboard:
-            return dash_id, dashboard, config
-
-    if "lovelace" in dashboards:
-        loaded_config = await _try_load_dashboard(dashboards["lovelace"])
-        if loaded_config is not None:
-            return "lovelace", dashboards["lovelace"], loaded_config
-
+    """Always use the dedicated Security dashboard at /security."""
     return await _get_or_create_security_dashboard(hass, lovelace_data)
 
 
 def _resolve_security_view(
-    config: dict, actual_dashboard_id: str | None
-) -> dict | None:
-    """Find or create the Security view on the target dashboard."""
+    config: dict,
+) -> dict:
+    """Return the Security view on the Security dashboard."""
     views = config.setdefault("views", [])
 
     for view in views:
         if isinstance(view, dict) and view.get("title", "").lower() == "security":
             return view
 
-    if actual_dashboard_id == "security" or not views:
-        view = {"title": "Security", "cards": []}
-        views.append(view)
-        return view
+    if views and isinstance(views[0], dict):
+        views[0]["title"] = "Security"
+        views[0].setdefault("cards", [])
+        return views[0]
 
-    return views[0] if views else None
+    view = {"title": "Security", "path": "default", "cards": []}
+    views.append(view)
+    return view
+
+
+async def _try_add_cards(
+    hass: HomeAssistant, entry: ConfigEntry, *, wait_timeout: int = 90
+) -> bool:
+    """Attempt to create Galaxy Lovelace cards. Returns True on success."""
+    collected = await _wait_for_entities(hass, entry.entry_id, timeout=wait_timeout)
+    entities = collected["entities"]
+
+    if not entities.get("display_line1") or not entities.get("display_line2"):
+        _LOGGER.warning(
+            "Keypad display entities not found yet for entry %s", entry.entry_id
+        )
+        return False
+
+    keypad_card = await _load_keypad_card(
+        entry, entities["display_line1"], entities["display_line2"]
+    )
+    if keypad_card is None:
+        return False
+
+    if LOVELACE_DATA not in hass.data:
+        _LOGGER.error("Lovelace not available")
+        return False
+
+    lovelace = hass.data[LOVELACE_DATA]
+    if not hasattr(lovelace, "dashboards"):
+        _LOGGER.error("Lovelace dashboards not available")
+        return False
+
+    _dashboard_id, target_dashboard, config = await _resolve_dashboard(
+        hass, lovelace
+    )
+    if not target_dashboard or config is None:
+        _LOGGER.error("No writable Security dashboard available for Galaxy cards")
+        return False
+
+    target_view = _resolve_security_view(config)
+    entity_cards = _build_entity_cards(collected, entities.get("printer_log"))
+    layout = _build_three_column_layout(keypad_card, entity_cards)
+    target_view["cards"] = [layout]
+
+    await target_dashboard.async_save(config)
+    _LOGGER.warning(
+        "Galaxy dashboard cards saved to /security (%s zones, %s groups). "
+        "Open the Security item in the sidebar to view the graphical keypad.",
+        len(collected["prio_zones"]),
+        len(collected["groups"]),
+    )
+    return True
 
 
 async def auto_add_cards(
@@ -383,55 +419,25 @@ async def auto_add_cards(
     delay_seconds: int = DEFAULT_CARD_SETUP_DELAY,
 ) -> None:
     """Add Galaxy Lovelace cards to the Security dashboard."""
-    _LOGGER.info("Scheduling Galaxy dashboard cards in %s seconds", delay_seconds)
+    _LOGGER.info("Galaxy dashboard cards scheduled in %s seconds", delay_seconds)
     await asyncio.sleep(delay_seconds)
 
     try:
-        collected = await _wait_for_entities(hass, entry.entry_id)
-        entities = collected["entities"]
+        for attempt, retry_delay in enumerate(CARD_SETUP_RETRIES):
+            if retry_delay and attempt > 0:
+                _LOGGER.info(
+                    "Retrying Galaxy dashboard cards (attempt %s)", attempt + 1
+                )
+                await asyncio.sleep(retry_delay)
 
-        if not entities.get("display_line1") or not entities.get("display_line2"):
-            _LOGGER.error("Keypad display entities not found, cannot create dashboard cards")
-            return
+            if await _try_add_cards(
+                hass, entry, wait_timeout=90 if attempt == 0 else 10
+            ):
+                return
 
-        keypad_card = await _load_keypad_card(
-            entry, entities["display_line1"], entities["display_line2"]
+        _LOGGER.error(
+            "Galaxy dashboard cards could not be created. "
+            "Run service honeywell_galaxy.add_dashboard_cards to retry."
         )
-        if keypad_card is None:
-            return
-
-        if LOVELACE_DATA not in hass.data:
-            _LOGGER.error("Lovelace not available")
-            return
-
-        lovelace = hass.data[LOVELACE_DATA]
-        if not hasattr(lovelace, "dashboards"):
-            _LOGGER.error("Lovelace dashboards not available")
-            return
-
-        actual_dashboard_id, target_dashboard, config = await _resolve_dashboard(
-            hass, lovelace
-        )
-        if not target_dashboard or config is None:
-            _LOGGER.error("No writable Lovelace dashboard available for Galaxy cards")
-            return
-
-        target_view = _resolve_security_view(config, actual_dashboard_id)
-        if target_view is None:
-            _LOGGER.error("No target view available for Galaxy cards")
-            return
-
-        entity_cards = _build_entity_cards(collected, entities.get("printer_log"))
-        layout = _build_three_column_layout(keypad_card, entity_cards)
-        target_view["cards"] = [layout]
-
-        await target_dashboard.async_save(config)
-        _LOGGER.info(
-            "Galaxy dashboard cards saved to dashboard '%s' (%s zones, %s groups)",
-            actual_dashboard_id,
-            len(collected["prio_zones"]),
-            len(collected["groups"]),
-        )
-
     except Exception as err:
         _LOGGER.error("Error adding Galaxy dashboard cards: %s", err, exc_info=True)

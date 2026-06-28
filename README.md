@@ -178,6 +178,8 @@ The Virtual Keypad device provides 16 buttons that match the physical keypad lay
 
 Each button press publishes the corresponding key value to the MQTT topic `selfmon/vmod.{vmodid}/vkp/key`.
 
+The graphical keypad is **not** shown on the device page. After setup, open **Security** in the left sidebar (`/security`).
+
 Add the Virtual Keypad device to your dashboard, or use the automatically created Galaxy Keypad card on the Security dashboard.
 
 The Security dashboard is created automatically at `/security` in the sidebar. It requires HACS custom cards (`button-card` and `stack-in-card`).

@@ -14,6 +14,7 @@ Guy Wells for the inspiration and his integration for the Galaxy with VMOD https
 
 - **Virtual Keypad**: Display lines and 16-button interface as Home Assistant entities
 - **Virtual Printer**: Sensor for printer log messages with print service
+- **Alarm Reporting**: Sensor for SIA4 alarm event log messages (requires SelfMon configuration — see below)
 - **Virtual RIO Zones**: Switches to control virtual zones (OPEN/CLOSED)
 - **Virtual RIO Outputs**: Binary sensors for virtual output states (On/Off)
 - **Physical RIO Zones**: Binary sensors for physical zone states (door, motion, smoke, etc.)
@@ -30,11 +31,12 @@ Guy Wells for the inspiration and his integration for the Galaxy with VMOD https
 
 Before installing this integration, ensure you have:
 
-1. **MQTT Server**: A working MQTT broker (e.g., Mosquitto) configured in Home Assistant
-2. **HACS Custom Cards** (for the automatic keypad dashboard):
+1. **Home Assistant 2026.3+**: Required for integration brand icons in the UI
+2. **MQTT Server**: A working MQTT broker (e.g., Mosquitto) configured in Home Assistant
+3. **HACS Custom Cards** (for the automatic keypad dashboard):
    - `button-card` by RomRider
    - `stack-in-card` by custom-cards
-3. **VMOD Installed**: The SelfMon VMOD installed and sensors and outputs triggered to populate the MQTT topic paths
+4. **VMOD Installed**: The SelfMon VMOD installed and sensors and outputs triggered to populate the MQTT topic paths
 
 ## Installation
 
@@ -68,13 +70,16 @@ Before installing this integration, ensure you have:
    - **Password**: (optional) MQTT password
    - **VMOD ID**: Your VMOD identifier
 
-After configuration, the integration will automatically discover Physical RIO zones and outputs, Virtual RIO zones and outputs, and Groups from MQTT topics. After discovery completes (~50 seconds), it automatically adds a graphical dashboard layout to the **Lovelace view for the area you assign** to the Honeywell Galaxy devices:
+After configuration, the integration will automatically discover Physical RIO zones and outputs, Virtual RIO zones and outputs, and Groups from MQTT topics. After discovery completes (typically a few seconds), it automatically adds a graphical dashboard layout to the **Lovelace view for the area you assign** to the Honeywell Galaxy devices:
 
 - Galaxy Keypad (graphical keypad with display lines)
 - Honeywell Galaxy Log (printer log)
+- Alarm Reporting Log (when alarm reporting is enabled on your VMOD)
 - Physical RIO Inputs and Outputs
 - Virtual RIO Zones and Outputs
 - Groups
+
+A **Honeywell Galaxy** sidebar dashboard is also created automatically for quick access to the graphical keypad view.
 
 ## Devices
 
@@ -84,11 +89,23 @@ Each integration instance creates the following devices under **Settings > Devic
 |--------|----------|
 | **Virtual Keypad** | Display Line 1, Display Line 2, 16 keypad buttons |
 | **Virtual Printer** | Printer Log (diagnostic) |
+| **Alarm Reporting** | Alarm Reporting Log (diagnostic) |
 | **Physical RIO** | Discovered zone and output binary sensors |
 | **Virtual RIO** | Discovered zone switches and output binary sensors |
 | **Galaxy Groups** | Discovered group status sensors |
 
 Add these devices to your dashboard using the standard Home Assistant UI, or open the dashboard view for the area you assigned during setup.
+
+## Alarm Reporting
+
+The **Alarm Reporting** device subscribes to SIA4 event messages from your VMOD and displays a rolling log (up to 10 lines), similar to the Virtual Printer log.
+
+**This feature is not enabled by default.** Alarm reporting must be configured on the SelfMon side and enabled on request to the [SelfMon admin](http://www.selfmon.uk/sales/). Until that is done, the device will appear in Home Assistant but no events will be received and the log will remain empty.
+
+After SelfMon enables alarm reporting for your VMOD:
+
+1. Reload the Honeywell Galaxy integration (or restart Home Assistant).
+2. Assign the **Alarm Reporting** device to an area if you want the **Alarm Reporting Log** card on that area's dashboard view.
 
 To rebuild the dashboard cards manually:
 
@@ -108,6 +125,9 @@ The integration uses the following MQTT topic structure:
 - Virtual Printer: `selfmon/vmod.{vmodid}/vprinter`
   - Log Messages: `selfmon/vmod.{vmodid}/vprinter/log`
   - Print Commands: `selfmon/vmod.{vmodid}/vprinter/print`
+
+- Alarm Reporting: `selfmon/vmod.{vmodid}/sia4/event`
+  - Event log messages (requires SelfMon configuration)
 
 - Virtual RIO Zones: `selfmon/vmod.{vmodid}/vrio/inputs/write/{zone_number}`
   - Commands: `OPEN` or `CLOSED`
@@ -131,7 +151,7 @@ The integration uses the following MQTT topic structure:
 
 ### `honeywell_galaxy.add_dashboard_cards`
 
-Rebuild the Galaxy Security dashboard cards (keypad, log, zones, outputs, groups).
+Rebuild the Honeywell Galaxy dashboard cards (keypad, printer log, alarm reporting log, zones, outputs, groups).
 
 ### `honeywell_galaxy.print_text`
 
@@ -155,6 +175,7 @@ After configuration, the integration automatically discovers and creates the fol
   - Display Line 1 (Virtual Keypad device)
   - Display Line 2 (Virtual Keypad device)
   - Printer Log (Virtual Printer device, diagnostic)
+  - Alarm Reporting Log (Alarm Reporting device, diagnostic)
   - Groups (Galaxy Groups device, one per discovered group)
 
 - **Buttons**: 16 Virtual Keypad buttons (Virtual Keypad device)
@@ -197,12 +218,13 @@ Virtual RIO Zones are controllable switches that allow you to set zones to OPEN 
 - **MQTT Connection Issues**: Check that your MQTT broker is accessible and credentials are correct
 - **No Entities Appearing**:
   - Ensure your VMOD ID is correct and MQTT messages are being published
-  - The integration automatically discovers entities from MQTT topics — wait up to 40 seconds after restart for discovery to complete
+  - The integration automatically discovers entities from MQTT topics — wait a few seconds after restart for discovery to complete
   - Check the Home Assistant logs for discovery messages
 - **States Not Updating**: Check MQTT topic subscriptions match your VMOD configuration
 - **Devices Not Showing**: Go to Settings > Devices & Services > Honeywell Galaxy and verify the child devices are listed
-- **Dashboard Cards Not Appearing**: Assign Honeywell Galaxy devices to an area during or after setup. Wait ~60 seconds for MQTT discovery, then check that area's dashboard view. Requires HACS `button-card` and `stack-in-card`. Run `honeywell_galaxy.add_dashboard_cards` to rebuild.
+- **Dashboard Cards Not Appearing**: Assign Honeywell Galaxy devices to an area during or after setup. Wait for MQTT discovery to complete, then check that area's dashboard view. Requires HACS `button-card` and `stack-in-card`. Run `honeywell_galaxy.add_dashboard_cards` to rebuild.
 - **Printer Log Truncated**: The sensor state is limited to 255 characters, but the full log (up to 10 lines) is available in the `log_lines` attribute
+- **Alarm Reporting Log Empty**: Alarm reporting must be configured and enabled on your VMOD by request to SelfMon admin. Until enabled, the integration receives no events on `sia4/event`
 
 ## Development
 
@@ -217,7 +239,7 @@ The integration uses MQTT wildcard subscriptions to automatically discover:
 - Virtual RIO outputs from `selfmon/vmod.{vmodid}/vrio/outputs/+`
 - Groups from `selfmon/vmod.{vmodid}/sia4/groups/+`
 
-Discovery runs for 10 seconds per category after integration setup.
+Discovery uses idle-based timeouts (typically 1–4 seconds per category) after integration setup.
 
 ## License
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Set
+from typing import Any
 
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
@@ -23,119 +23,9 @@ from .const import (
 )
 from .coordinator import GalaxyCoordinator
 from .device import physical_rio_device_info, virtual_rio_device_info
+from .mqtt_discovery import discover_mqtt_numeric_ids
 
 _LOGGER = logging.getLogger(__name__)
-
-
-async def _discover_prio_zones(coordinator: GalaxyCoordinator, vmodid: str) -> Set[int]:
-    """Discover Physical RIO zones by subscribing to MQTT wildcard topic."""
-    discovered_zones: Set[int] = set()
-    discovery_topic = f"{TOPIC_PRIO_INPUTS.format(vmodid=vmodid)}/+"
-    
-    def discovery_handler(topic: str, payload: str) -> None:
-        """Handle discovery messages."""
-        try:
-            zone_num_str = topic.split("/")[-1]
-            zone_num = int(zone_num_str)
-            discovered_zones.add(zone_num)
-            _LOGGER.warning(f"Discovered Physical RIO zone: {zone_num} (value: {payload})")
-        except (ValueError, IndexError) as e:
-            _LOGGER.debug(f"Could not parse zone number from topic {topic}: {e}")
-    
-    if not coordinator.connected:
-        _LOGGER.warning("MQTT not connected, waiting for connection...")
-        for _ in range(10):
-            await asyncio.sleep(1)
-            if coordinator.connected:
-                break
-        if not coordinator.connected:
-            _LOGGER.error("MQTT not connected after 10 seconds, cannot discover zones")
-            return discovered_zones
-    
-    _LOGGER.info(f"Subscribing to discovery topic: {discovery_topic}")
-    coordinator.subscribe(discovery_topic, discovery_handler)
-    
-    _LOGGER.warning(f"Waiting 10 seconds for MQTT messages on {discovery_topic}...")
-    await asyncio.sleep(10)
-    
-    _LOGGER.warning(f"Discovery complete. Found {len(discovered_zones)} zones: {sorted(discovered_zones)}")
-    coordinator.unsubscribe(discovery_topic, discovery_handler)
-    
-    return discovered_zones
-
-
-async def _discover_prio_outputs(coordinator: GalaxyCoordinator, vmodid: str) -> Set[int]:
-    """Discover Physical RIO outputs by subscribing to MQTT wildcard topic."""
-    discovered_outputs: Set[int] = set()
-    discovery_topic = f"{TOPIC_PRIO_OUTPUTS.format(vmodid=vmodid)}/+"
-    
-    def discovery_handler(topic: str, payload: str) -> None:
-        """Handle discovery messages."""
-        try:
-            output_num_str = topic.split("/")[-1]
-            output_num = int(output_num_str)
-            discovered_outputs.add(output_num)
-            _LOGGER.warning(f"Discovered Physical RIO output: {output_num} (value: {payload})")
-        except (ValueError, IndexError) as e:
-            _LOGGER.debug(f"Could not parse output number from topic {topic}: {e}")
-    
-    if not coordinator.connected:
-        _LOGGER.warning("MQTT not connected, waiting for connection...")
-        for _ in range(10):
-            await asyncio.sleep(1)
-            if coordinator.connected:
-                break
-        if not coordinator.connected:
-            _LOGGER.error("MQTT not connected after 10 seconds, cannot discover outputs")
-            return discovered_outputs
-    
-    _LOGGER.info(f"Subscribing to discovery topic: {discovery_topic}")
-    coordinator.subscribe(discovery_topic, discovery_handler)
-    
-    _LOGGER.warning(f"Waiting 10 seconds for MQTT messages on {discovery_topic}...")
-    await asyncio.sleep(10)
-    
-    _LOGGER.warning(f"Discovery complete. Found {len(discovered_outputs)} outputs: {sorted(discovered_outputs)}")
-    coordinator.unsubscribe(discovery_topic, discovery_handler)
-    
-    return discovered_outputs
-
-
-async def _discover_vrio_outputs(coordinator: GalaxyCoordinator, vmodid: str) -> Set[int]:
-    """Discover Virtual RIO outputs by subscribing to MQTT wildcard topic."""
-    discovered_outputs: Set[int] = set()
-    discovery_topic = f"{TOPIC_VRIO_OUTPUTS.format(vmodid=vmodid)}/+"
-    
-    def discovery_handler(topic: str, payload: str) -> None:
-        """Handle discovery messages."""
-        try:
-            output_num_str = topic.split("/")[-1]
-            output_num = int(output_num_str)
-            discovered_outputs.add(output_num)
-            _LOGGER.warning(f"Discovered Virtual RIO output: {output_num} (value: {payload})")
-        except (ValueError, IndexError) as e:
-            _LOGGER.debug(f"Could not parse output number from topic {topic}: {e}")
-    
-    if not coordinator.connected:
-        _LOGGER.warning("MQTT not connected, waiting for connection...")
-        for _ in range(10):
-            await asyncio.sleep(1)
-            if coordinator.connected:
-                break
-        if not coordinator.connected:
-            _LOGGER.error("MQTT not connected after 10 seconds, cannot discover outputs")
-            return discovered_outputs
-    
-    _LOGGER.info(f"Subscribing to discovery topic: {discovery_topic}")
-    coordinator.subscribe(discovery_topic, discovery_handler)
-    
-    _LOGGER.warning(f"Waiting 10 seconds for MQTT messages on {discovery_topic}...")
-    await asyncio.sleep(10)
-    
-    _LOGGER.warning(f"Discovery complete. Found {len(discovered_outputs)} Virtual RIO outputs: {sorted(discovered_outputs)}")
-    coordinator.unsubscribe(discovery_topic, discovery_handler)
-    
-    return discovered_outputs
 
 
 async def async_setup_entry(
@@ -150,11 +40,57 @@ async def async_setup_entry(
     entities = []
 
     physical_zones = entry.options.get("physical_rio_zones", [])
-    
+    physical_outputs = entry.options.get("physical_rio_outputs", [])
+    virtual_outputs = entry.options.get("virtual_rio_outputs", [])
+
+    discovery_tasks: dict[str, asyncio.Task[set[int]]] = {}
     if not physical_zones:
-        _LOGGER.warning("No Physical RIO zones configured. Discovering zones from MQTT topics...")
-        discovered_zones = await _discover_prio_zones(coordinator, vmodid)
-        _LOGGER.warning(f"Discovered {len(discovered_zones)} Physical RIO zones: {sorted(discovered_zones)}")
+        _LOGGER.info(
+            "No Physical RIO zones configured. Discovering zones from MQTT topics..."
+        )
+        discovery_tasks["prio_zones"] = asyncio.create_task(
+            discover_mqtt_numeric_ids(
+                coordinator,
+                f"{TOPIC_PRIO_INPUTS.format(vmodid=vmodid)}/+",
+                label="Physical RIO zone",
+            )
+        )
+    if not physical_outputs:
+        _LOGGER.info(
+            "No Physical RIO outputs configured. Discovering outputs from MQTT topics..."
+        )
+        discovery_tasks["prio_outputs"] = asyncio.create_task(
+            discover_mqtt_numeric_ids(
+                coordinator,
+                f"{TOPIC_PRIO_OUTPUTS.format(vmodid=vmodid)}/+",
+                label="Physical RIO output",
+            )
+        )
+    if not virtual_outputs:
+        _LOGGER.info(
+            "No Virtual RIO outputs configured. Discovering outputs from MQTT topics..."
+        )
+        discovery_tasks["vrio_outputs"] = asyncio.create_task(
+            discover_mqtt_numeric_ids(
+                coordinator,
+                f"{TOPIC_VRIO_OUTPUTS.format(vmodid=vmodid)}/+",
+                label="Virtual RIO output",
+            )
+        )
+
+    discovered: dict[str, set[int]] = {}
+    if discovery_tasks:
+        names = list(discovery_tasks)
+        results = await asyncio.gather(*discovery_tasks.values())
+        discovered = dict(zip(names, results, strict=True))
+
+    if not physical_zones:
+        discovered_zones = discovered.get("prio_zones", set())
+        _LOGGER.info(
+            "Discovered %s Physical RIO zones: %s",
+            len(discovered_zones),
+            sorted(discovered_zones),
+        )
         for zone_num in discovered_zones:
             entities.append(
                 PhysicalRIOZone(
@@ -186,12 +122,13 @@ async def async_setup_entry(
                 )
             )
 
-    physical_outputs = entry.options.get("physical_rio_outputs", [])
-    
     if not physical_outputs:
-        _LOGGER.warning("No Physical RIO outputs configured. Discovering outputs from MQTT topics...")
-        discovered_outputs = await _discover_prio_outputs(coordinator, vmodid)
-        _LOGGER.warning(f"Discovered {len(discovered_outputs)} Physical RIO outputs: {sorted(discovered_outputs)}")
+        discovered_outputs = discovered.get("prio_outputs", set())
+        _LOGGER.info(
+            "Discovered %s Physical RIO outputs: %s",
+            len(discovered_outputs),
+            sorted(discovered_outputs),
+        )
         for output_num in discovered_outputs:
             entities.append(
                 PhysicalRIOOutput(
@@ -214,12 +151,13 @@ async def async_setup_entry(
                 )
             )
 
-    virtual_outputs = entry.options.get("virtual_rio_outputs", [])
-    
     if not virtual_outputs:
-        _LOGGER.warning("No Virtual RIO outputs configured. Discovering outputs from MQTT topics...")
-        discovered_vrio_outputs = await _discover_vrio_outputs(coordinator, vmodid)
-        _LOGGER.warning(f"Discovered {len(discovered_vrio_outputs)} Virtual RIO outputs: {sorted(discovered_vrio_outputs)}")
+        discovered_vrio_outputs = discovered.get("vrio_outputs", set())
+        _LOGGER.info(
+            "Discovered %s Virtual RIO outputs: %s",
+            len(discovered_vrio_outputs),
+            sorted(discovered_vrio_outputs),
+        )
         for output_num in discovered_vrio_outputs:
             entities.append(
                 VirtualRIOOutput(

@@ -1,9 +1,8 @@
 """Support for Honeywell Galaxy sensors."""
 from __future__ import annotations
 
-import asyncio
 import logging
-from typing import Any, Set
+from typing import Any
 
 from homeassistant.components.sensor import SensorEntity, SensorEntityDescription
 from homeassistant.config_entries import ConfigEntry
@@ -12,9 +11,10 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, TOPIC_VKP, TOPIC_VPRINTER, TOPIC_SIA4_GROUPS
+from .const import DOMAIN, TOPIC_SIA4_GROUPS, TOPIC_VKP, TOPIC_VPRINTER
 from .coordinator import GalaxyCoordinator
 from .device import groups_device_info, virtual_keypad_device_info, virtual_printer_device_info
+from .mqtt_discovery import discover_mqtt_numeric_ids
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -38,43 +38,6 @@ PRINTER_SENSOR = SensorEntityDescription(
 )
 
 
-async def _discover_groups(coordinator: GalaxyCoordinator, vmodid: str) -> Set[int]:
-    """Discover groups by subscribing to MQTT wildcard topic."""
-    discovered_groups: Set[int] = set()
-    discovery_topic = f"{TOPIC_SIA4_GROUPS.format(vmodid=vmodid)}/+"
-    
-    def discovery_handler(topic: str, payload: str) -> None:
-        """Handle discovery messages."""
-        try:
-            group_num_str = topic.split("/")[-1]
-            group_num = int(group_num_str)
-            discovered_groups.add(group_num)
-            _LOGGER.warning(f"Discovered group: {group_num} (value: {payload})")
-        except (ValueError, IndexError) as e:
-            _LOGGER.debug(f"Could not parse group number from topic {topic}: {e}")
-    
-    if not coordinator.connected:
-        _LOGGER.warning("MQTT not connected, waiting for connection...")
-        for _ in range(10):
-            await asyncio.sleep(1)
-            if coordinator.connected:
-                break
-        if not coordinator.connected:
-            _LOGGER.error("MQTT not connected after 10 seconds, cannot discover groups")
-            return discovered_groups
-    
-    _LOGGER.info(f"Subscribing to discovery topic: {discovery_topic}")
-    coordinator.subscribe(discovery_topic, discovery_handler)
-    
-    _LOGGER.warning(f"Waiting 10 seconds for MQTT messages on {discovery_topic}...")
-    await asyncio.sleep(10)
-    
-    _LOGGER.warning(f"Discovery complete. Found {len(discovered_groups)} groups: {sorted(discovered_groups)}")
-    coordinator.unsubscribe(discovery_topic, discovery_handler)
-    
-    return discovered_groups
-
-
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -91,9 +54,13 @@ async def async_setup_entry(
 
     entities.append(PrinterLogSensor(coordinator, entry, vmodid))
 
-    _LOGGER.warning("Discovering groups from MQTT topics...")
-    discovered_groups = await _discover_groups(coordinator, vmodid)
-    _LOGGER.warning(f"Discovered {len(discovered_groups)} groups: {sorted(discovered_groups)}")
+    _LOGGER.info("Discovering groups from MQTT topics...")
+    discovered_groups = await discover_mqtt_numeric_ids(
+        coordinator,
+        f"{TOPIC_SIA4_GROUPS.format(vmodid=vmodid)}/+",
+        label="group",
+    )
+    _LOGGER.info("Discovered %s groups: %s", len(discovered_groups), sorted(discovered_groups))
     for group_num in discovered_groups:
         entities.append(GroupSensor(coordinator, entry, vmodid, group_num))
 

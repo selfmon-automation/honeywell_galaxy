@@ -47,6 +47,15 @@ _LOGGER = logging.getLogger(__name__)
 
 GALAXY_KEYPAD_TITLE = "Galaxy Keypad"
 GALAXY_VIEW_TITLE = "Honeywell Galaxy"
+GALAXY_VIEW_TITLES = frozenset(
+    {
+        GALAXY_VIEW_TITLE.casefold(),
+        "security",
+        "galaxy",
+        "honeywell galaxy",
+    }
+)
+GALAXY_VIEW_PATHS = frozenset({"galaxy", "security"})
 GALAXY_KEYPAD_URL_PATH = "galaxy-keypad"
 LEGACY_GALAXY_KEYPAD_URL_PATH = "security"
 DEFAULT_CARD_SETUP_DELAY = 50
@@ -257,15 +266,7 @@ async def _get_or_create_galaxy_keypad_dashboard(
     )
     config = await _try_load_dashboard(galaxy_dashboard)
     if config is None:
-        config = {
-            "views": [
-                {
-                    "title": GALAXY_VIEW_TITLE,
-                    "path": "galaxy",
-                    "cards": [],
-                }
-            ]
-        }
+        config = {"views": []}
         await galaxy_dashboard.async_save(config)
 
     return item[CONF_URL_PATH], galaxy_dashboard, config
@@ -914,12 +915,7 @@ def _normalize_security_dashboard_view(config: dict) -> dict:
     target: dict | None = None
     other_views: list[dict] = []
 
-    galaxy_titles = {
-        GALAXY_VIEW_TITLE.casefold(),
-        "security",
-        "galaxy",
-        "honeywell galaxy",
-    }
+    galaxy_titles = GALAXY_VIEW_TITLES
 
     for view in views:
         title = view.get("title", "").casefold()
@@ -942,26 +938,18 @@ def _normalize_security_dashboard_view(config: dict) -> dict:
     return target
 
 
-def _is_galaxy_keypad_panel_view(view: dict) -> bool:
-    """Return True if a view is the dedicated Honeywell Galaxy keypad tab."""
+def _is_dedicated_galaxy_view(view: dict) -> bool:
+    """Return True if a view is the dedicated Honeywell Galaxy tab."""
     title = view.get("title", "").casefold()
-    if title not in {
-        GALAXY_VIEW_TITLE.casefold(),
-        "security",
-        "galaxy",
-        "honeywell galaxy",
-    }:
-        return False
-    if view.get("type") == "panel":
+    if title in GALAXY_VIEW_TITLES:
         return True
-    cards = view.get("cards", [])
-    return len(cards) == 1 and _is_galaxy_layout_card(cards[0])
+    return view.get("path", "").casefold() in GALAXY_VIEW_PATHS
 
 
 def _remove_dedicated_galaxy_view(config: dict) -> None:
-    """Drop the Honeywell Galaxy tab when the keypad uses an area view instead."""
+    """Drop Honeywell Galaxy tabs when cards live on area views instead."""
     views = [view for view in config.get("views", []) if isinstance(view, dict)]
-    filtered = [view for view in views if not _is_galaxy_keypad_panel_view(view)]
+    filtered = [view for view in views if not _is_dedicated_galaxy_view(view)]
     if len(filtered) < len(views):
         config["views"] = filtered
 
@@ -1049,6 +1037,7 @@ async def _resolve_area_dashboard_view(
         view = _ensure_area_view(config, area_id, area_name)
         if view.get("type") == "panel":
             view.pop("type", None)
+        _remove_dedicated_galaxy_view(config)
         _LOGGER.info(
             "Using area tab '%s' on Galaxy Keypad dashboard /%s",
             area_name,
@@ -1279,7 +1268,7 @@ async def _try_add_cards_for_assigned_devices(
         for device_type, cards in area_cards:
             _merge_device_cards_into_view(target_view, cards, device_type)
 
-        if dash_id and _is_galaxy_keypad_dashboard(dash_id):
+        if dash_id and _is_dedicated_galaxy_dashboard(dash_id):
             _remove_dedicated_galaxy_view(config)
 
         await target_dashboard.async_save(config)

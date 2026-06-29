@@ -896,23 +896,38 @@ def _find_dashboard_by_substring(
     return None
 
 
+def _find_area_view_in_config(
+    config: dict, area_id: str, area_name: str
+) -> dict | None:
+    """Return a dashboard view matching an area, if present."""
+    for view in config.get("views", []):
+        if isinstance(view, dict) and _view_matches_area(view, area_id, area_name):
+            return view
+    return None
+
+
 def _normalize_security_dashboard_view(config: dict) -> dict:
-    """Collapse duplicate views on /security into one canonical tab."""
+    """Ensure a canonical Honeywell Galaxy tab without removing other views."""
     config.pop("strategy", None)
 
     views = [view for view in config.get("views", []) if isinstance(view, dict)]
     target: dict | None = None
+    other_views: list[dict] = []
+
+    galaxy_titles = {
+        GALAXY_VIEW_TITLE.casefold(),
+        "security",
+        "galaxy",
+        "honeywell galaxy",
+    }
 
     for view in views:
         title = view.get("title", "").casefold()
-        if title in {
-            GALAXY_VIEW_TITLE.casefold(),
-            "security",
-            "galaxy",
-            "honeywell galaxy",
-        }:
-            target = view
-            break
+        if title in galaxy_titles:
+            if target is None:
+                target = view
+            continue
+        other_views.append(view)
 
     if target is None:
         target = {"title": GALAXY_VIEW_TITLE, "path": "galaxy", "cards": []}
@@ -923,7 +938,7 @@ def _normalize_security_dashboard_view(config: dict) -> dict:
     target.pop("sections", None)
     if target.get("type") == "sections":
         target.pop("type", None)
-    config["views"] = [target]
+    config["views"] = [target, *other_views]
     return target
 
 
@@ -998,6 +1013,24 @@ async def _resolve_area_dashboard_view(
                 dash_id or "default",
             )
             return dash_id, dashboard, config, view
+
+    dash_id, dashboard, config = await _get_or_create_galaxy_keypad_dashboard(
+        hass, lovelace_data
+    )
+    if dashboard and config is not None:
+        loaded = await _try_load_dashboard(dashboard)
+        if loaded is not None:
+            config = loaded
+        config.pop("strategy", None)
+        view = _ensure_area_view(config, area_id, area_name)
+        if view.get("type") == "panel":
+            view.pop("type", None)
+        _LOGGER.info(
+            "Using area tab '%s' on Galaxy Keypad dashboard /%s",
+            area_name,
+            dash_id,
+        )
+        return dash_id, dashboard, config, view
 
     return None, None, None, None
 
@@ -1097,6 +1130,10 @@ async def _save_keypad_to_galaxy_dashboard(
     if not dashboard or config is None:
         return False
 
+    loaded = await _try_load_dashboard(dashboard)
+    if loaded is not None:
+        config = loaded
+
     view = _normalize_security_dashboard_view(config)
     _apply_galaxy_layout(config, view, keypad_card, dedicated_dashboard=True)
     await dashboard.async_save(config)
@@ -1144,7 +1181,10 @@ async def _try_add_cards_for_assigned_devices(
             for device_type in assigned_types
         ):
             break
-        if second >= 30:
+        if second >= 30 and any(
+            _device_collection_ready(collections[device_type], device_type)
+            for device_type in assigned_types
+        ):
             break
         await asyncio.sleep(1)
 
@@ -1187,9 +1227,22 @@ async def _try_add_cards_for_assigned_devices(
         dash_id, target_dashboard, config, target_view = (
             await _resolve_area_dashboard_view(hass, lovelace, area_id, area_name)
         )
-        if not target_dashboard or config is None or target_view is None:
+        if not target_dashboard:
             _LOGGER.error(
                 "No writable Lovelace dashboard available for area '%s'", area_name
+            )
+            continue
+
+        fresh_config = await _try_load_dashboard(target_dashboard)
+        if fresh_config is not None:
+            config = fresh_config
+            target_view = _find_area_view_in_config(config, area_id, area_name)
+            if target_view is None:
+                target_view = _ensure_area_view(config, area_id, area_name)
+
+        if config is None or target_view is None:
+            _LOGGER.error(
+                "Could not load dashboard view for area '%s'", area_name
             )
             continue
 
@@ -1198,9 +1251,10 @@ async def _try_add_cards_for_assigned_devices(
 
         await target_dashboard.async_save(config)
         view_label = target_view.get("title") or target_view.get("path") or "view"
+        dashboard_label = dash_id or GALAXY_KEYPAD_URL_PATH
         _LOGGER.info(
             "Galaxy cards saved to dashboard '%s', view '%s' (%s device groups)",
-            dash_id or "default",
+            dashboard_label,
             view_label,
             len(area_cards),
         )

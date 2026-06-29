@@ -81,7 +81,7 @@ def _async_listen_for_device_area_changes(
             return
 
         if device.area_id:
-            schedule_add_cards(hass, entry, device_id=device.id)
+            schedule_add_cards(hass, entry)
 
     return hass.bus.async_listen(EVENT_DEVICE_REGISTRY_UPDATED, _handle_device_registry_update)
 

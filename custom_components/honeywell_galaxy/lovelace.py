@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -320,17 +321,38 @@ def _classify_entity(
         collected["groups"].append({"entity_id": entity_id, "group_number": group_num})
 
 
-def _collect_entities_for_device(
-    entity_registry: er.EntityRegistry, entry_id: str, device_id: str
+def _entity_belongs_to_device_type(
+    unique_id: str, entry_id: str, device_type: str
+) -> bool:
+    """Return True when an entity unique id belongs to a Galaxy device type."""
+    if device_type == DEVICE_TYPE_VIRTUAL_KEYPAD:
+        return unique_id.endswith(("_keypad_display_line1", "_keypad_display_line2"))
+    if device_type == DEVICE_TYPE_VIRTUAL_PRINTER:
+        return unique_id.endswith("_printer_log")
+    if device_type == DEVICE_TYPE_PHYSICAL_RIO:
+        return unique_id.startswith(f"{entry_id}_prio_zone_") or unique_id.startswith(
+            f"{entry_id}_prio_output_"
+        )
+    if device_type == DEVICE_TYPE_VIRTUAL_RIO:
+        return unique_id.startswith(f"{entry_id}_vrio_zone_") or unique_id.startswith(
+            f"{entry_id}_vrio_output_"
+        )
+    if device_type == DEVICE_TYPE_GROUPS:
+        return unique_id.startswith(f"{entry_id}_group_")
+    return False
+
+
+def _collect_entities_for_device_type(
+    entity_registry: er.EntityRegistry, entry_id: str, device_type: str
 ) -> dict[str, Any]:
-    """Collect entities belonging to a single Honeywell Galaxy device."""
+    """Collect entities for one Honeywell Galaxy device type."""
     collected = _empty_entity_collection()
 
     for entity_entry in er.async_entries_for_config_entry(entity_registry, entry_id):
-        if entity_entry.device_id != device_id:
-            continue
         unique_id = entity_entry.unique_id
         if unique_id is None:
+            continue
+        if not _entity_belongs_to_device_type(unique_id, entry_id, device_type):
             continue
         _classify_entity(
             collected, unique_id, entity_entry.entity_id, entry_id
@@ -1038,30 +1060,6 @@ def _device_collection_ready(collected: dict[str, Any], device_type: str) -> boo
     return False
 
 
-async def _wait_for_device_entities(
-    hass: HomeAssistant,
-    entry_id: str,
-    device_id: str,
-    device_type: str,
-    *,
-    timeout: int = 90,
-) -> dict[str, Any]:
-    """Wait for entities on a specific device before building its cards."""
-    entity_registry = er.async_get(hass)
-
-    for second in range(timeout):
-        collected = _collect_entities_for_device(
-            entity_registry, entry_id, device_id
-        )
-        if _device_collection_ready(collected, device_type):
-            return collected
-        if second >= 10 and device_type != DEVICE_TYPE_VIRTUAL_KEYPAD:
-            return collected
-        await asyncio.sleep(1)
-
-    return _collect_entities_for_device(entity_registry, entry_id, device_id)
-
-
 async def _build_device_cards(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -1087,40 +1085,6 @@ async def _build_device_cards(
     )
 
 
-async def _save_cards_to_area_view(
-    hass: HomeAssistant,
-    lovelace_data,
-    area_id: str,
-    area_name: str,
-    cards: list[dict],
-    device_type: str,
-) -> bool:
-    """Merge device cards into the dashboard view for an area."""
-    if not cards:
-        return False
-
-    dash_id, target_dashboard, config, target_view = (
-        await _resolve_area_dashboard_view(hass, lovelace_data, area_id, area_name)
-    )
-    if not target_dashboard or config is None or target_view is None:
-        _LOGGER.error(
-            "No writable Lovelace dashboard available for area '%s'", area_name
-        )
-        return False
-
-    _merge_device_cards_into_view(target_view, cards, device_type)
-    await target_dashboard.async_save(config)
-
-    view_label = target_view.get("title") or target_view.get("path") or "view"
-    _LOGGER.info(
-        "Galaxy cards for %s saved to dashboard '%s', view '%s'",
-        device_type,
-        dash_id or "default",
-        view_label,
-    )
-    return True
-
-
 async def _save_keypad_to_galaxy_dashboard(
     hass: HomeAssistant,
     lovelace_data,
@@ -1140,21 +1104,15 @@ async def _save_keypad_to_galaxy_dashboard(
     return True
 
 
-async def _try_add_cards_for_device(
+async def _try_add_cards_for_assigned_devices(
     hass: HomeAssistant,
     entry: ConfigEntry,
-    device_id: str,
     *,
     wait_timeout: int = 90,
 ) -> bool:
-    """Add Lovelace cards for one Honeywell Galaxy device."""
-    device_registry = dr.async_get(hass)
-    device = device_registry.async_get(device_id)
-    if device is None or not device.area_id:
-        return False
-
-    device_type = get_device_type(device)
-    if device_type is None:
+    """Add Lovelace cards for every Honeywell Galaxy device that has an area."""
+    devices = iter_devices_with_areas(hass, entry)
+    if not devices:
         return False
 
     if LOVELACE_DATA not in hass.data:
@@ -1166,39 +1124,92 @@ async def _try_add_cards_for_device(
         _LOGGER.error("Lovelace dashboards not available")
         return False
 
-    collected = await _wait_for_device_entities(
-        hass, entry.entry_id, device_id, device_type, timeout=wait_timeout
-    )
-    cards = await _build_device_cards(hass, entry, device_type, collected)
-    if not cards:
-        _LOGGER.warning(
-            "No cards built yet for %s device on entry %s",
-            device_type,
-            entry.entry_id,
+    assigned_types = {
+        device_type
+        for device in devices
+        if (device_type := get_device_type(device)) is not None
+    }
+    entity_registry = er.async_get(hass)
+    collections: dict[str, dict[str, Any]] = {}
+
+    for second in range(wait_timeout):
+        collections = {
+            device_type: _collect_entities_for_device_type(
+                entity_registry, entry.entry_id, device_type
+            )
+            for device_type in assigned_types
+        }
+        if all(
+            _device_collection_ready(collections[device_type], device_type)
+            for device_type in assigned_types
+        ):
+            break
+        if second >= 30:
+            break
+        await asyncio.sleep(1)
+
+    pending: list[tuple[dr.DeviceEntry, str, list[dict]]] = []
+    for device in devices:
+        device_type = get_device_type(device)
+        if device_type is None:
+            continue
+
+        collected = collections.get(device_type) or _collect_entities_for_device_type(
+            entity_registry, entry.entry_id, device_type
         )
+        cards = await _build_device_cards(hass, entry, device_type, collected)
+        if not cards:
+            _LOGGER.warning(
+                "No cards built yet for %s (%s)", device.name, device_type
+            )
+            continue
+        pending.append((device, device_type, cards))
+
+    if not pending:
         return False
 
-    area_name = _area_name(hass, device.area_id)
-    if area_name is None:
-        return False
+    cards_by_area: dict[str, list[tuple[str, list[dict]]]] = defaultdict(list)
+    keypad_card: dict | None = None
 
-    saved = await _save_cards_to_area_view(
-        hass,
-        lovelace,
-        device.area_id,
-        area_name,
-        cards,
-        device_type,
-    )
+    for device, device_type, cards in pending:
+        if device.area_id is None:
+            continue
+        cards_by_area[device.area_id].append((device_type, cards))
+        if device_type == DEVICE_TYPE_VIRTUAL_KEYPAD:
+            keypad_card = cards[0]
 
-    if device_type == DEVICE_TYPE_VIRTUAL_KEYPAD:
+    saved = False
+    for area_id, area_cards in cards_by_area.items():
+        area_name = _area_name(hass, area_id)
+        if area_name is None:
+            continue
+
+        dash_id, target_dashboard, config, target_view = (
+            await _resolve_area_dashboard_view(hass, lovelace, area_id, area_name)
+        )
+        if not target_dashboard or config is None or target_view is None:
+            _LOGGER.error(
+                "No writable Lovelace dashboard available for area '%s'", area_name
+            )
+            continue
+
+        for device_type, cards in area_cards:
+            _merge_device_cards_into_view(target_view, cards, device_type)
+
+        await target_dashboard.async_save(config)
+        view_label = target_view.get("title") or target_view.get("path") or "view"
+        _LOGGER.info(
+            "Galaxy cards saved to dashboard '%s', view '%s' (%s device groups)",
+            dash_id or "default",
+            view_label,
+            len(area_cards),
+        )
+        saved = True
+
+    if keypad_card is not None:
         resources_ok = await _ensure_lovelace_resources(hass)
-        keypad_saved = await _save_keypad_to_galaxy_dashboard(
-            hass, lovelace, cards[0]
-        )
-        saved = saved or keypad_saved
-
-        if keypad_saved:
+        if await _save_keypad_to_galaxy_dashboard(hass, lovelace, keypad_card):
+            saved = True
             from homeassistant.components import persistent_notification
 
             resource_hint = ""
@@ -1322,23 +1333,19 @@ def _merge_layout_into_view(view: dict, layout: dict) -> None:
 def schedule_add_cards(
     hass: HomeAssistant,
     entry: ConfigEntry,
-    *,
-    device_id: str | None = None,
     delay_seconds: int = CARD_RESCHEDULE_DELAY,
 ) -> None:
-    """Debounce dashboard card creation after a device area assignment changes."""
-    handle_key = f"{entry.entry_id}:{device_id or 'all'}"
-    if handle_key in _card_schedule_handles:
-        _card_schedule_handles[handle_key]()
+    """Debounce dashboard card creation after device area assignments change."""
+    entry_id = entry.entry_id
+    if entry_id in _card_schedule_handles:
+        _card_schedule_handles[entry_id]()
 
     @callback
     def _run(_now) -> None:
-        _card_schedule_handles.pop(handle_key, None)
-        hass.async_create_task(
-            auto_add_cards(hass, entry, delay_seconds=0, device_id=device_id)
-        )
+        _card_schedule_handles.pop(entry_id, None)
+        hass.async_create_task(auto_add_cards(hass, entry, delay_seconds=0))
 
-    _card_schedule_handles[handle_key] = async_call_later(hass, delay_seconds, _run)
+    _card_schedule_handles[entry_id] = async_call_later(hass, delay_seconds, _run)
 
 
 async def auto_add_cards(
@@ -1346,7 +1353,6 @@ async def auto_add_cards(
     entry: ConfigEntry,
     delay_seconds: int = DEFAULT_CARD_SETUP_DELAY,
     *,
-    device_id: str | None = None,
     full_dashboard: bool = False,
 ) -> None:
     """Add Galaxy Lovelace cards for assigned devices."""
@@ -1371,32 +1377,18 @@ async def auto_add_cards(
                     return
                 continue
 
-            if device_id:
-                if await _try_add_cards_for_device(
-                    hass, entry, device_id, wait_timeout=wait_timeout
-                ):
-                    return
-                continue
-
-            devices = iter_devices_with_areas(hass, entry)
-            if not devices:
-                if attempt == len(CARD_SETUP_RETRIES) - 1:
-                    _LOGGER.warning(
-                        "No Honeywell Galaxy devices have an area assigned yet. "
-                        "Assign an area on each device you want on a dashboard, then "
-                        "run honeywell_galaxy.add_dashboard_cards."
-                    )
-                continue
-
-            results: list[bool] = []
-            for device in devices:
-                results.append(
-                    await _try_add_cards_for_device(
-                        hass, entry, device.id, wait_timeout=wait_timeout
-                    )
-                )
-            if any(results):
+            if await _try_add_cards_for_assigned_devices(
+                hass, entry, wait_timeout=wait_timeout
+            ):
                 return
+
+            if attempt == len(CARD_SETUP_RETRIES) - 1:
+                _LOGGER.warning(
+                    "No Honeywell Galaxy devices have an area assigned yet, or "
+                    "entities are still being discovered. Assign an area on each "
+                    "device you want on a dashboard, then run "
+                    "honeywell_galaxy.add_dashboard_cards."
+                )
 
         _LOGGER.error(
             "Galaxy dashboard cards could not be created. "

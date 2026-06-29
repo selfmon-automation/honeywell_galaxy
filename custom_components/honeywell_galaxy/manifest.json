@@ -1,9 +1,9 @@
 {
   "domain": "honeywell_galaxy",
   "name": "Honeywell Galaxy",
-  "version": "2.3.1",
-  "documentation": "https://github.com/selfmon/honeywell_galaxy",
-  "issue_tracker": "https://github.com/selfmon/honeywell_galaxy/issues",
+  "version": "2.3.2",
+  "documentation": "https://github.com/selfmon-automation/honeywell_galaxy",
+  "issue_tracker": "https://github.com/selfmon-automation/honeywell_galaxy/issues",
   "codeowners": ["@selfmon"],
   "requirements": ["paho-mqtt>=1.6.0"],
   "config_flow": true,

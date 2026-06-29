@@ -31,12 +31,13 @@ Guy Wells for the inspiration and his integration for the Galaxy with VMOD https
 
 Before installing this integration, ensure you have:
 
-1. **Home Assistant 2026.3+**: Required for integration brand icons in the UI
-2. **MQTT Server**: A working MQTT broker (e.g., Mosquitto) configured in Home Assistant
-3. **HACS Custom Cards** (for the automatic keypad dashboard):
+1. **Home Assistant 2026.2+**: Required to install and run the integration
+2. **Home Assistant 2026.3+** (optional): Required for integration brand icons in the UI
+3. **MQTT Server**: A working MQTT broker (e.g., Mosquitto) configured in Home Assistant
+4. **HACS Custom Cards** (for the automatic keypad dashboard):
    - `button-card` by RomRider
    - `stack-in-card` by custom-cards
-4. **VMOD Installed**: The SelfMon VMOD installed and sensors and outputs triggered to populate the MQTT topic paths
+5. **VMOD Installed**: The SelfMon VMOD installed and sensors and outputs triggered to populate the MQTT topic paths
 
 ## Installation
 

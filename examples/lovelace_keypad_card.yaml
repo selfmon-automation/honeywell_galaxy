@@ -1,11 +1,20 @@
-# Honeywell Galaxy Keypad Card Template
-# Placeholders (XXXXXX_*) are replaced automatically by the integration.
+# Optional Honeywell Galaxy Keypad Lovelace Card
+#
+# This is an optional manual Lovelace card for users who want a keypad-style layout.
+# Requires HACS custom cards: button-card and stack-in-card.
+#
+# Replace the placeholders before adding to a dashboard:
+#   XXXXXX_DISPLAY_LINE_1  -> sensor entity for display line 1
+#   XXXXXX_DISPLAY_LINE_2  -> sensor entity for display line 2
+#   XXXXXX_MQTT_TOPIC      -> selfmon/vmod.{vmodid}/vkp/key
+#
+# Alternatively, use the Virtual Keypad device entities directly in your dashboard.
 
 title: Galaxy Keypad
 keep:
-  background: true
-  border_radius: true
-  box_shadow: true
+  background: 'true'
+  border_radius: 'true'
+  box_shadow: 'true'
 mode: vertical
 type: custom:stack-in-card
 cards:

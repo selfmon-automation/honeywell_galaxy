@@ -1,9 +1,8 @@
 """Support for Honeywell Galaxy Virtual RIO Zones."""
 from __future__ import annotations
 
-import asyncio
 import logging
-from typing import Any, Set
+from typing import Any
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
@@ -13,45 +12,10 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, TOPIC_VRIO_INPUTS, TOPIC_VRIO_INPUTS_READ
 from .coordinator import GalaxyCoordinator
+from .device import virtual_rio_device_info
+from .mqtt_discovery import discover_mqtt_numeric_ids
 
 _LOGGER = logging.getLogger(__name__)
-
-
-async def _discover_vrio_zones(coordinator: GalaxyCoordinator, vmodid: str) -> Set[int]:
-    """Discover Virtual RIO zones by subscribing to MQTT read topic."""
-    discovered_zones: Set[int] = set()
-    discovery_topic = f"{TOPIC_VRIO_INPUTS_READ.format(vmodid=vmodid)}/+"
-    
-    def discovery_handler(topic: str, payload: str) -> None:
-        """Handle discovery messages."""
-        try:
-            zone_num_str = topic.split("/")[-1]
-            zone_num = int(zone_num_str)
-            discovered_zones.add(zone_num)
-            _LOGGER.warning(f"Discovered Virtual RIO zone: {zone_num} (value: {payload})")
-        except (ValueError, IndexError) as e:
-            _LOGGER.debug(f"Could not parse zone number from topic {topic}: {e}")
-    
-    if not coordinator.connected:
-        _LOGGER.warning("MQTT not connected, waiting for connection...")
-        for _ in range(10):
-            await asyncio.sleep(1)
-            if coordinator.connected:
-                break
-        if not coordinator.connected:
-            _LOGGER.error("MQTT not connected after 10 seconds, cannot discover zones")
-            return discovered_zones
-    
-    _LOGGER.info(f"Subscribing to discovery topic: {discovery_topic}")
-    coordinator.subscribe(discovery_topic, discovery_handler)
-    
-    _LOGGER.warning(f"Waiting 10 seconds for MQTT messages on {discovery_topic}...")
-    await asyncio.sleep(10)
-    
-    _LOGGER.warning(f"Discovery complete. Found {len(discovered_zones)} Virtual RIO zones: {sorted(discovered_zones)}")
-    coordinator.unsubscribe(discovery_topic, discovery_handler)
-    
-    return discovered_zones
 
 
 async def async_setup_entry(
@@ -68,13 +32,21 @@ async def async_setup_entry(
     zones = entry.options.get("virtual_rio_zones", [])
     
     if not zones:
-        _LOGGER.warning("No Virtual RIO zones configured. Discovering zones from MQTT topics...")
-        discovered_zones = await _discover_vrio_zones(coordinator, vmodid)
-        _LOGGER.warning(f"Discovered {len(discovered_zones)} Virtual RIO zones: {sorted(discovered_zones)}")
+        _LOGGER.info("No Virtual RIO zones configured. Discovering zones from MQTT topics...")
+        discovered_zones = await discover_mqtt_numeric_ids(
+            coordinator,
+            f"{TOPIC_VRIO_INPUTS_READ.format(vmodid=vmodid)}/+",
+            label="Virtual RIO zone",
+        )
+        _LOGGER.info(
+            "Discovered %s Virtual RIO zones: %s",
+            len(discovered_zones),
+            sorted(discovered_zones),
+        )
         for zone_num in discovered_zones:
             entities.append(
                 VirtualRIOZone(
-                    coordinator, entry, vmodid, zone_num, f"Virtual RIO Zone {zone_num}"
+                    coordinator, entry, vmodid, zone_num, None
                 )
             )
     else:
@@ -112,7 +84,8 @@ class VirtualRIOZone(CoordinatorEntity, SwitchEntity):
         self._is_on = False
 
         self._attr_unique_id = f"{entry.entry_id}_vrio_zone_{zone_number}"
-        self._attr_name = name or f"Virtual RIO Zone {zone_number}"
+        self._attr_name = name or f"Zone {zone_number}"
+        self._attr_device_info = virtual_rio_device_info(entry)
 
     @property
     def is_on(self) -> bool:

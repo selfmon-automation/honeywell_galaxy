@@ -942,6 +942,30 @@ def _normalize_security_dashboard_view(config: dict) -> dict:
     return target
 
 
+def _is_galaxy_keypad_panel_view(view: dict) -> bool:
+    """Return True if a view is the dedicated Honeywell Galaxy keypad tab."""
+    title = view.get("title", "").casefold()
+    if title not in {
+        GALAXY_VIEW_TITLE.casefold(),
+        "security",
+        "galaxy",
+        "honeywell galaxy",
+    }:
+        return False
+    if view.get("type") == "panel":
+        return True
+    cards = view.get("cards", [])
+    return len(cards) == 1 and _is_galaxy_layout_card(cards[0])
+
+
+def _remove_dedicated_galaxy_view(config: dict) -> None:
+    """Drop the Honeywell Galaxy tab when the keypad uses an area view instead."""
+    views = [view for view in config.get("views", []) if isinstance(view, dict)]
+    filtered = [view for view in views if not _is_galaxy_keypad_panel_view(view)]
+    if len(filtered) < len(views):
+        config["views"] = filtered
+
+
 def _apply_galaxy_layout(
     config: dict,
     target_view: dict,
@@ -1212,11 +1236,17 @@ async def _try_add_cards_for_assigned_devices(
     keypad_card: dict | None = None
 
     for device, device_type, cards in pending:
+        if device_type == DEVICE_TYPE_VIRTUAL_KEYPAD:
+            keypad_card = cards[0]
         if device.area_id is None:
             continue
         cards_by_area[device.area_id].append((device_type, cards))
-        if device_type == DEVICE_TYPE_VIRTUAL_KEYPAD:
-            keypad_card = cards[0]
+
+    keypad_has_area = any(
+        device_type == DEVICE_TYPE_VIRTUAL_KEYPAD
+        for area_cards in cards_by_area.values()
+        for device_type, _ in area_cards
+    )
 
     saved = False
     for area_id, area_cards in cards_by_area.items():
@@ -1249,6 +1279,9 @@ async def _try_add_cards_for_assigned_devices(
         for device_type, cards in area_cards:
             _merge_device_cards_into_view(target_view, cards, device_type)
 
+        if dash_id and _is_galaxy_keypad_dashboard(dash_id):
+            _remove_dedicated_galaxy_view(config)
+
         await target_dashboard.async_save(config)
         view_label = target_view.get("title") or target_view.get("path") or "view"
         dashboard_label = dash_id or GALAXY_KEYPAD_URL_PATH
@@ -1262,7 +1295,41 @@ async def _try_add_cards_for_assigned_devices(
 
     if keypad_card is not None:
         resources_ok = await _ensure_lovelace_resources(hass)
-        if await _save_keypad_to_galaxy_dashboard(hass, lovelace, keypad_card):
+        if keypad_has_area:
+            if saved:
+                from homeassistant.components import persistent_notification
+
+                keypad_area_name = next(
+                    (
+                        _area_name(hass, device.area_id)
+                        for device, device_type, _ in pending
+                        if device_type == DEVICE_TYPE_VIRTUAL_KEYPAD
+                        and device.area_id is not None
+                    ),
+                    None,
+                )
+                area_label = keypad_area_name or "your area"
+                resource_hint = ""
+                if not resources_ok:
+                    resource_hint = (
+                        "\n\nThe graphical keypad requires **button-card** (RomRider) and "
+                        "**stack-in-card** (custom-cards) from HACS. Install any missing "
+                        "plugins, add them under Settings → Dashboards → Resources, hard-"
+                        "refresh the browser (Cmd+Shift+R), then run "
+                        "**honeywell_galaxy.add_dashboard_cards** again."
+                    )
+
+                persistent_notification.async_create(
+                    hass,
+                    (
+                        f"Galaxy cards were added to the **{area_label}** tab on "
+                        f"**{GALAXY_KEYPAD_TITLE}** (/{GALAXY_KEYPAD_URL_PATH})."
+                        f"{resource_hint}"
+                    ),
+                    title="Honeywell Galaxy",
+                    notification_id=f"{DOMAIN}_dashboard_cards",
+                )
+        elif await _save_keypad_to_galaxy_dashboard(hass, lovelace, keypad_card):
             saved = True
             from homeassistant.components import persistent_notification
 

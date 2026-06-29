@@ -33,6 +33,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_call_later
 
 from .const import (
+    DEVICE_TYPE_ALARM_REPORTING,
     DEVICE_TYPE_GROUPS,
     DEVICE_TYPE_PHYSICAL_RIO,
     DEVICE_TYPE_VIRTUAL_KEYPAD,
@@ -94,6 +95,7 @@ LOVELACE_RESOURCE_TARGETS = (
 
 DEVICE_TYPE_CARD_TITLES: dict[str, tuple[str, ...]] = {
     DEVICE_TYPE_VIRTUAL_PRINTER: ("Honeywell Galaxy Log",),
+    DEVICE_TYPE_ALARM_REPORTING: ("Alarm Reporting Log",),
     DEVICE_TYPE_PHYSICAL_RIO: ("Physical RIO Inputs", "Physical RIO Outputs"),
     DEVICE_TYPE_VIRTUAL_RIO: ("Virtual RIO Zones", "Virtual RIO Outputs"),
     DEVICE_TYPE_GROUPS: ("Groups",),
@@ -342,6 +344,8 @@ def _classify_entity(
         collected["entities"]["display_line2"] = entity_id
     elif unique_id.endswith("_printer_log"):
         collected["entities"]["printer_log"] = entity_id
+    elif unique_id.endswith("_alarm_reporting_log"):
+        collected["entities"]["alarm_reporting_log"] = entity_id
     elif unique_id.startswith(f"{entry_id}_prio_zone_"):
         zone_num = unique_id.replace(f"{entry_id}_prio_zone_", "")
         collected["prio_zones"].append({"entity_id": entity_id, "zone_number": zone_num})
@@ -371,6 +375,8 @@ def _entity_belongs_to_device_type(
         return unique_id.endswith(("_keypad_display_line1", "_keypad_display_line2"))
     if device_type == DEVICE_TYPE_VIRTUAL_PRINTER:
         return unique_id.endswith("_printer_log")
+    if device_type == DEVICE_TYPE_ALARM_REPORTING:
+        return unique_id.endswith("_alarm_reporting_log")
     if device_type == DEVICE_TYPE_PHYSICAL_RIO:
         return unique_id.startswith(f"{entry_id}_prio_zone_") or unique_id.startswith(
             f"{entry_id}_prio_output_"
@@ -496,10 +502,33 @@ def _tag_card(card: dict, device_type: str) -> dict:
     return card
 
 
+def _build_log_markdown_card(title: str, entity_id: str, device_type: str) -> dict:
+    """Build a monospace markdown card backed by a log_lines sensor attribute."""
+    return _tag_card(
+        {
+            "type": "markdown",
+            "title": title,
+            "content": (
+                f"```\n{{{{ (state_attr('{entity_id}', 'log_lines') or []) "
+                f"| join('\\n') }}}}\n```"
+            ),
+            "card_mod": {
+                "style": (
+                    "ha-card { background: #f9f9f9; font-family: monospace; "
+                    "font-size: 12px; max-height: 500px; overflow-y: auto; } "
+                    ".markdown { white-space: pre-wrap; }"
+                )
+            },
+        },
+        device_type,
+    )
+
+
 def _build_entity_cards(
     collected: dict[str, Any],
-    printer_log: str | None,
     *,
+    printer_log: str | None = None,
+    alarm_reporting_log: str | None = None,
     device_types: frozenset[str] | None = None,
 ) -> list[dict]:
     """Build Lovelace entity cards, optionally limited to specific device types."""
@@ -508,23 +537,17 @@ def _build_entity_cards(
 
     if printer_log and include(DEVICE_TYPE_VIRTUAL_PRINTER):
         cards.append(
-            _tag_card(
-                {
-                    "type": "markdown",
-                    "title": "Honeywell Galaxy Log",
-                    "content": (
-                        f"```\n{{{{ (state_attr('{printer_log}', 'log_lines') or []) "
-                        f"| join('\\n') }}}}\n```"
-                    ),
-                    "card_mod": {
-                        "style": (
-                            "ha-card { background: #f9f9f9; font-family: monospace; "
-                            "font-size: 12px; max-height: 500px; overflow-y: auto; } "
-                            ".markdown { white-space: pre-wrap; }"
-                        )
-                    },
-                },
-                DEVICE_TYPE_VIRTUAL_PRINTER,
+            _build_log_markdown_card(
+                "Honeywell Galaxy Log", printer_log, DEVICE_TYPE_VIRTUAL_PRINTER
+            )
+        )
+
+    if alarm_reporting_log and include(DEVICE_TYPE_ALARM_REPORTING):
+        cards.append(
+            _build_log_markdown_card(
+                "Alarm Reporting Log",
+                alarm_reporting_log,
+                DEVICE_TYPE_ALARM_REPORTING,
             )
         )
 
@@ -615,6 +638,7 @@ def _build_three_column_layout(
 ) -> dict:
     """Build a full-width keypad row with entity cards in columns below."""
     log_card = _card_by_title(entity_cards, "Honeywell Galaxy Log")
+    alarm_reporting_card = _card_by_title(entity_cards, "Alarm Reporting Log")
     zones_card = _card_by_title(entity_cards, "Physical RIO Inputs")
     outputs_card = _card_by_title(entity_cards, "Physical RIO Outputs")
     vrio_zones_card = _card_by_title(entity_cards, "Virtual RIO Zones")
@@ -628,7 +652,7 @@ def _build_three_column_layout(
         col
         for col in (
             _column(vrio_outputs_card, groups_card),
-            _column(log_card, zones_card),
+            _column(log_card, alarm_reporting_card, zones_card),
             _column(outputs_card, vrio_zones_card),
         )
         if col["cards"]
@@ -1138,6 +1162,8 @@ def _device_collection_ready(collected: dict[str, Any], device_type: str) -> boo
         return bool(entities.get("display_line1") and entities.get("display_line2"))
     if device_type == DEVICE_TYPE_VIRTUAL_PRINTER:
         return bool(collected["entities"].get("printer_log"))
+    if device_type == DEVICE_TYPE_ALARM_REPORTING:
+        return bool(collected["entities"].get("alarm_reporting_log"))
     if device_type == DEVICE_TYPE_PHYSICAL_RIO:
         return bool(collected["prio_zones"] or collected["prio_outputs"])
     if device_type == DEVICE_TYPE_VIRTUAL_RIO:
@@ -1167,7 +1193,8 @@ async def _build_device_cards(
 
     return _build_entity_cards(
         collected,
-        collected["entities"].get("printer_log"),
+        printer_log=collected["entities"].get("printer_log"),
+        alarm_reporting_log=collected["entities"].get("alarm_reporting_log"),
         device_types=frozenset({device_type}),
     )
 
@@ -1425,7 +1452,11 @@ async def _try_add_full_dashboard(
         _LOGGER.error("Galaxy Keypad dashboard is not available")
         return False
 
-    entity_cards = _build_entity_cards(collected, entities.get("printer_log"))
+    entity_cards = _build_entity_cards(
+        collected,
+        printer_log=entities.get("printer_log"),
+        alarm_reporting_log=entities.get("alarm_reporting_log"),
+    )
     layout = _build_three_column_layout(
         _tag_card(keypad_card, DEVICE_TYPE_VIRTUAL_KEYPAD), entity_cards
     )

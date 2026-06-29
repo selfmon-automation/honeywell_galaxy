@@ -9,6 +9,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity import DeviceInfo
 
 from .const import (
+    DEVICE_TYPE_ALARM_REPORTING,
     DEVICE_TYPE_GROUPS,
     DEVICE_TYPE_PHYSICAL_RIO,
     DEVICE_TYPE_VIRTUAL_KEYPAD,
@@ -37,6 +38,16 @@ def virtual_printer_device_info(entry: ConfigEntry) -> DeviceInfo:
         name="Virtual Printer",
         manufacturer=MANUFACTURER,
         model="VMOD Virtual Printer",
+    )
+
+
+def alarm_reporting_device_info(entry: ConfigEntry) -> DeviceInfo:
+    """Return device info for Alarm Reporting."""
+    return DeviceInfo(
+        identifiers={(DOMAIN, entry.entry_id, DEVICE_TYPE_ALARM_REPORTING)},
+        name="Alarm Reporting",
+        manufacturer=MANUFACTURER,
+        model="VMOD SIA4 Event Reporting",
     )
 
 
@@ -75,6 +86,7 @@ CHILD_DEVICE_INFO_FACTORIES: tuple[
 ] = (
     virtual_keypad_device_info,
     virtual_printer_device_info,
+    alarm_reporting_device_info,
     physical_rio_device_info,
     virtual_rio_device_info,
     groups_device_info,

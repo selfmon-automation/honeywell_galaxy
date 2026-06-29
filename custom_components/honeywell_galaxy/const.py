@@ -12,6 +12,7 @@ TOPIC_VRIO_OUTPUTS = "selfmon/vmod.{vmodid}/vrio/outputs"
 TOPIC_PRIO_INPUTS = "selfmon/vmod.{vmodid}/prio/inputs/read"
 TOPIC_PRIO_OUTPUTS = "selfmon/vmod.{vmodid}/prio/outputs"
 TOPIC_SIA4_GROUPS = "selfmon/vmod.{vmodid}/sia4/groups"
+TOPIC_SIA4_EVENT = "selfmon/vmod.{vmodid}/sia4/event"
 
 # MQTT discovery timing
 MQTT_CONNECT_MAX_SECONDS = 5
@@ -22,6 +23,7 @@ DISCOVERY_POLL_INTERVAL = 0.25
 # Device types
 DEVICE_TYPE_VIRTUAL_KEYPAD = "virtual_keypad"
 DEVICE_TYPE_VIRTUAL_PRINTER = "virtual_printer"
+DEVICE_TYPE_ALARM_REPORTING = "alarm_reporting"
 DEVICE_TYPE_VIRTUAL_RIO = "virtual_rio"
 DEVICE_TYPE_PHYSICAL_RIO = "physical_rio"
 DEVICE_TYPE_GROUPS = "groups"

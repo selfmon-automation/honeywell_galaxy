@@ -43,11 +43,7 @@ Before installing this integration, ensure you have:
 ### HACS (Recommended)
 
 1. Open HACS in Home Assistant
-2. Go to "Integrations"
-3. Click the three dots menu and select "Custom repositories"
-4. Add this repository URL
-5. Search for "Honeywell Galaxy" and install
-6. Restart Home Assistant
+2. Search for "Honeywell Galaxy" and install
 
 ### Manual Installation
 

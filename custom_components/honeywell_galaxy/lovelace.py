@@ -47,6 +47,8 @@ _LOGGER = logging.getLogger(__name__)
 
 GALAXY_KEYPAD_TITLE = "Galaxy Keypad"
 GALAXY_VIEW_TITLE = "Honeywell Galaxy"
+GALAXY_DASHBOARD_TITLE = GALAXY_VIEW_TITLE
+GALAXY_DASHBOARD_ICON = "mdi:security"
 GALAXY_VIEW_TITLES = frozenset(
     {
         GALAXY_VIEW_TITLE.casefold(),
@@ -102,10 +104,10 @@ _card_schedule_handles: dict[str, callback] = {}
 DEFAULT_GALAXY_KEYPAD_DASHBOARD_ITEM = {
     "id": GALAXY_KEYPAD_URL_PATH,
     CONF_ALLOW_SINGLE_WORD: True,
-    CONF_ICON: "mdi:dialpad",
+    CONF_ICON: GALAXY_DASHBOARD_ICON,
     CONF_REQUIRE_ADMIN: False,
     CONF_SHOW_IN_SIDEBAR: True,
-    CONF_TITLE: GALAXY_KEYPAD_TITLE,
+    CONF_TITLE: GALAXY_DASHBOARD_TITLE,
     CONF_URL_PATH: GALAXY_KEYPAD_URL_PATH,
 }
 
@@ -185,8 +187,37 @@ def _find_galaxy_keypad_dashboard_item(collection: DashboardsCollection) -> dict
 
 
 def _galaxy_keypad_dashboard_item() -> dict:
-    """Return a minimal Galaxy Keypad dashboard item for LovelaceStorage."""
+    """Return a minimal Honeywell Galaxy dashboard item for LovelaceStorage."""
     return dict(DEFAULT_GALAXY_KEYPAD_DASHBOARD_ITEM)
+
+
+async def _sync_galaxy_dashboard_item(
+    collection: DashboardsCollection, item: dict
+) -> dict:
+    """Update stored dashboard metadata when sidebar defaults change."""
+    desired = {
+        CONF_TITLE: DEFAULT_GALAXY_KEYPAD_DASHBOARD_ITEM[CONF_TITLE],
+        CONF_ICON: DEFAULT_GALAXY_KEYPAD_DASHBOARD_ITEM[CONF_ICON],
+        CONF_SHOW_IN_SIDEBAR: DEFAULT_GALAXY_KEYPAD_DASHBOARD_ITEM[CONF_SHOW_IN_SIDEBAR],
+    }
+    if all(item.get(key) == value for key, value in desired.items()):
+        return item
+
+    updated = dict(item)
+    updated.update(desired)
+    await collection.async_update_item(updated)
+    return updated
+
+
+async def _refresh_galaxy_dashboard_panel(
+    hass: HomeAssistant, item: dict
+) -> None:
+    """Re-register the sidebar panel so title and icon changes apply."""
+    panel_item = _galaxy_keypad_dashboard_item()
+    panel_item[CONF_URL_PATH] = item.get(CONF_URL_PATH, GALAXY_KEYPAD_URL_PATH)
+    await _register_storage_dashboard_panel(
+        hass, panel_item, update=_panel_exists(hass, panel_item[CONF_URL_PATH])
+    )
 
 
 async def _ensure_galaxy_keypad_dashboard_loaded(
@@ -219,46 +250,56 @@ async def _get_or_create_galaxy_keypad_dashboard(
 ) -> tuple[str | None, LovelaceStorage | None, dict | None]:
     """Return a writable Galaxy Keypad dashboard, creating one if needed."""
     dashboards = lovelace_data.dashboards
+    collection = DashboardsCollection(hass)
+    await collection.async_load()
+    item = _find_galaxy_keypad_dashboard_item(collection)
 
     for url_path in (GALAXY_KEYPAD_URL_PATH, LEGACY_GALAXY_KEYPAD_URL_PATH):
         if url_path in dashboards:
             galaxy_dashboard = dashboards[url_path]
             config = await _try_load_dashboard(galaxy_dashboard)
             if config is not None:
+                if item is not None:
+                    item = await _sync_galaxy_dashboard_item(collection, item)
+                    await _refresh_galaxy_dashboard_panel(hass, item)
                 return url_path, galaxy_dashboard, config
 
-    collection = DashboardsCollection(hass)
-    await collection.async_load()
-    item = _find_galaxy_keypad_dashboard_item(collection)
+    if item is not None:
+        item = await _sync_galaxy_dashboard_item(collection, item)
+        galaxy_dashboard = await _ensure_galaxy_keypad_dashboard_loaded(
+            hass, lovelace_data, item
+        )
+        config = await _try_load_dashboard(galaxy_dashboard)
+        if config is not None:
+            return item[CONF_URL_PATH], galaxy_dashboard, config
 
-    if item is None:
-        try:
-            await collection.async_create_item(
-                {
-                    CONF_ALLOW_SINGLE_WORD: True,
-                    CONF_ICON: DEFAULT_GALAXY_KEYPAD_DASHBOARD_ITEM[CONF_ICON],
-                    CONF_TITLE: DEFAULT_GALAXY_KEYPAD_DASHBOARD_ITEM[CONF_TITLE],
-                    CONF_URL_PATH: GALAXY_KEYPAD_URL_PATH,
-                }
+    try:
+        await collection.async_create_item(
+            {
+                CONF_ALLOW_SINGLE_WORD: True,
+                CONF_ICON: DEFAULT_GALAXY_KEYPAD_DASHBOARD_ITEM[CONF_ICON],
+                CONF_TITLE: DEFAULT_GALAXY_KEYPAD_DASHBOARD_ITEM[CONF_TITLE],
+                CONF_URL_PATH: GALAXY_KEYPAD_URL_PATH,
+            }
+        )
+    except HomeAssistantError as err:
+        if getattr(err, "translation_key", None) == "url_already_exists":
+            _LOGGER.info(
+                "Honeywell Galaxy dashboard panel already registered; reusing /%s",
+                GALAXY_KEYPAD_URL_PATH,
             )
-        except HomeAssistantError as err:
-            if getattr(err, "translation_key", None) == "url_already_exists":
-                _LOGGER.info(
-                    "Galaxy Keypad dashboard panel already registered; reusing /%s",
-                    GALAXY_KEYPAD_URL_PATH,
-                )
-                item = _galaxy_keypad_dashboard_item()
-            else:
-                _LOGGER.warning("Could not create Galaxy Keypad dashboard: %s", err)
-                return None, None, None
-        except vol.Invalid as err:
-            _LOGGER.warning("Could not create Galaxy Keypad dashboard: %s", err)
-            return None, None, None
+            item = _galaxy_keypad_dashboard_item()
         else:
-            item = _find_galaxy_keypad_dashboard_item(collection)
+            _LOGGER.warning("Could not create Honeywell Galaxy dashboard: %s", err)
+            return None, None, None
+    except vol.Invalid as err:
+        _LOGGER.warning("Could not create Honeywell Galaxy dashboard: %s", err)
+        return None, None, None
+    else:
+        item = _find_galaxy_keypad_dashboard_item(collection)
 
     if item is None:
-        _LOGGER.error("Galaxy Keypad dashboard item could not be resolved")
+        _LOGGER.error("Honeywell Galaxy dashboard item could not be resolved")
         return None, None, None
 
     galaxy_dashboard = await _ensure_galaxy_keypad_dashboard_loaded(
@@ -1312,7 +1353,7 @@ async def _try_add_cards_for_assigned_devices(
                     hass,
                     (
                         f"Galaxy cards were added to the **{area_label}** tab on "
-                        f"**{GALAXY_KEYPAD_TITLE}** (/{GALAXY_KEYPAD_URL_PATH})."
+                        f"**{GALAXY_DASHBOARD_TITLE}** (/{GALAXY_KEYPAD_URL_PATH})."
                         f"{resource_hint}"
                     ),
                     title="Honeywell Galaxy",
@@ -1335,7 +1376,7 @@ async def _try_add_cards_for_assigned_devices(
             persistent_notification.async_create(
                 hass,
                 (
-                    f"The graphical keypad is ready. Open **{GALAXY_KEYPAD_TITLE}** in "
+                    f"The graphical keypad is ready. Open **{GALAXY_DASHBOARD_TITLE}** in "
                     f"the left sidebar, or go to /{GALAXY_KEYPAD_URL_PATH} in your "
                     "browser."
                     f"{resource_hint}"
@@ -1404,7 +1445,7 @@ async def _try_add_full_dashboard(
     persistent_notification.async_create(
         hass,
         (
-            f"Full Galaxy dashboard rebuilt on **{GALAXY_KEYPAD_TITLE}** "
+            f"Full Galaxy dashboard rebuilt on **{GALAXY_DASHBOARD_TITLE}** "
             f"(/{dash_id}).{resource_hint}"
         ),
         title="Honeywell Galaxy",
